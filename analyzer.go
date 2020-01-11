@@ -47,15 +47,16 @@ const LoadMode = packages.NeedName |
 // It is passed through to all rule functions as they are called. Rules may use
 // this data in conjunction withe the encountered AST node.
 type Context struct {
-	FileSet  *token.FileSet
-	Comments ast.CommentMap
-	Info     *types.Info
-	Pkg      *types.Package
-	PkgFiles []*ast.File
-	Root     *ast.File
-	Config   Config
-	Imports  *ImportTracker
-	Ignores  []map[string]bool
+	FileSet      *token.FileSet
+	Comments     ast.CommentMap
+	Info         *types.Info
+	Pkg          *types.Package
+	PkgFiles     []*ast.File
+	Root         *ast.File
+	Config       Config
+	Imports      *ImportTracker
+	Ignores      []map[string]bool
+	PassedValues map[string]interface{}
 }
 
 // Metrics used when reporting information about a scanning run.
@@ -204,6 +205,7 @@ func (gosec *Analyzer) Check(pkg *packages.Package) {
 		gosec.context.PkgFiles = pkg.Syntax
 		gosec.context.Imports = NewImportTracker()
 		gosec.context.Imports.TrackFile(file)
+		gosec.context.PassedValues = make(map[string]interface{})
 		ast.Walk(gosec, file)
 		gosec.stats.NumFiles++
 		gosec.stats.NumLines += pkg.Fset.File(file.Pos()).LineCount()
@@ -259,18 +261,23 @@ func (gosec *Analyzer) AppendError(file string, err error) {
 	gosec.errors[file] = errors
 }
 
-// ignore a node (and sub-tree) if it is tagged with a "#nosec" comment
+// ignore a node (and sub-tree) if it is tagged with a nosec tag comment
 func (gosec *Analyzer) ignore(n ast.Node) ([]string, bool) {
 	if groups, ok := gosec.context.Comments[n]; ok && !gosec.ignoreNosec {
 
 		// Checks if an alternative for #nosec is set and, if not, uses the default.
-		noSecAlternative, err := gosec.config.GetGlobal(NoSecAlternative)
+		noSecDefaultTag := "#nosec"
+		noSecAlternativeTag, err := gosec.config.GetGlobal(NoSecAlternative)
 		if err != nil {
-			noSecAlternative = "#nosec"
+			noSecAlternativeTag = noSecDefaultTag
 		}
 
 		for _, group := range groups {
-			if strings.Contains(group.Text(), noSecAlternative) {
+
+			foundDefaultTag := strings.Contains(group.Text(), noSecDefaultTag)
+			foundAlternativeTag := strings.Contains(group.Text(), noSecAlternativeTag)
+
+			if foundDefaultTag || foundAlternativeTag {
 				gosec.stats.NumNosec++
 
 				// Pull out the specific rules that are listed to be ignored.
