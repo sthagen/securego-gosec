@@ -14,7 +14,7 @@ You may obtain a copy of the License [here](http://www.apache.org/licenses/LICEN
 ## Project status
 
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/3218/badge)](https://bestpractices.coreinfrastructure.org/projects/3218)
-[![Build Status](https://travis-ci.org/securego/gosec.svg?branch=master)](https://travis-ci.org/securego/gosec)
+[![Build Status](https://github.com/securego/gosec/workflows/CI/badge.svg)](https://github.com/securego/gosec/actions?query=workflows%3ACI)
 [![Coverage Status](https://codecov.io/gh/securego/gosec/branch/master/graph/badge.svg)](https://codecov.io/gh/securego/gosec)
 [![GoReport](https://goreportcard.com/badge/github.com/securego/gosec)](https://goreportcard.com/badge/github.com/securego/gosec)
 [![GoDoc](https://godoc.org/github.com/securego/gosec?status.svg)](https://godoc.org/github.com/securego/gosec)
@@ -46,6 +46,32 @@ wget https://github.com/securego/gosec/releases/download/vX.Y.Z/gosec_vX.Y.Z_OS.
 echo "<check sum from the check sum file>  gosec_vX.Y.Z_OS.tar.gz" | sha256sum -c -
 
 gosec --help
+```
+### GitHub Action
+
+You can run `gosec` as a GitHub action as follows:
+
+```yaml
+name: Run Gosec
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      GO111MODULE: on
+    steps:
+      - name: Checkout Source 
+        uses: actions/checkout@v2
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
+        with:
+          args: ./...
 ```
 
 ### Local Installation
@@ -93,6 +119,7 @@ directory you can supply `./...` as the input argument.
 - G503: Import blacklist: crypto/rc4
 - G504: Import blacklist: net/http/cgi
 - G505: Import blacklist: crypto/sha1
+- G601: Implicit memory aliasing of items from a range statement
 
 ### Retired rules
 
@@ -141,6 +168,20 @@ of functions which will be skipped when auditing the not checked errors:
 {
     "G104": {
         "io/ioutil": ["WriteFile"]
+    }
+}
+```
+
+You can also configure the hard-coded credentials rule `G101` with additional patters, or adjust the entropy threshold:
+
+```JSON
+{
+    "G101": {
+        "pattern": "(?i)passwd|pass|password|pwd|secret|private_key|token",
+         "ingnore_entropy": false,
+         "entropy_threshold": "80.0",
+         "per_char_threshold": "3.0",
+         "trucate": "32"
     }
 }
 ```
@@ -214,9 +255,9 @@ gosec -tag debug,ignore ./...
 
 ### Output formats
 
-gosec currently supports text, json, yaml, csv, sonarqube, JUnit XML and golint output formats. By default
+gosec currently supports `text`, `json`, `yaml`, `csv`, `sonarqube`, `JUnit XML`, `html` and `golint` output formats. By default
 results will be reported to stdout, but can also be written to an output
-file. The output format is controlled by the '-fmt' flag, and the output file is controlled by the '-out' flag as follows:
+file. The output format is controlled by the `-fmt` flag, and the output file is controlled by the `-out` flag as follows:
 
 ```bash
 # Write output in json format to results.json
@@ -227,51 +268,39 @@ $ gosec -fmt=json -out=results.json *.go
 
 ### Build
 
+You can build the binary with:
 ```bash
 make
 ```
 
 ### Tests
 
+You can run all unit tests using:
 ```bash
 make test
 ```
 
-### Release Build
+### Release
 
-Make sure you have installed the [goreleaser](https://github.com/goreleaser/goreleaser) tool and then you can release gosec as follows:
+You can create a release by tagging the version as follows:
 
-```bash
-git tag v1.0.0
-export GITHUB_TOKEN=<YOUR GITHUB TOKEN>
-make release
+``` bash
+git tag v1.0.0 -m "Release version v1.0.0"
+git push origin v1.0.0
 ```
 
-The released version of the tool is available in the `dist` folder. The build information should be displayed in the usage text.
-
-```bash
-./dist/darwin_amd64/gosec -h
-gosec  - Golang security checker
-
-gosec analyzes Go source code to look for common programming mistakes that
-
-
-VERSION: 1.0.0
-GIT TAG: v1.0.0
-BUILD DATE: 2018-04-27T12:41:38Z
-```
-
-Note that all released archives are also uploaded to GitHub.
+The GitHub [release workflow](.github/workflows/release.yml) triggers immediately after the tag is pushed upstream. This flow will
+release the binaries using the [goreleaser](https://goreleaser.com/actions/) action and then it will build and publish the docker image into Docker Hub.
 
 ### Docker image
 
-You can build the docker image as follows:
+You can also build locally the docker image by using the command:
 
 ```bash
 make image
 ```
 
-You can run the `gosec` tool in a container against your local Go project. You just have to mount the project 
+You can run the `gosec` tool in a container against your local Go project. You only have to mount the project 
 into a volume as follows:
 
 ```bash

@@ -14,7 +14,7 @@
 
 package rules
 
-import "github.com/securego/gosec"
+import "github.com/securego/gosec/v2"
 
 // RuleDefinition contains the description of a rule and a mechanism to
 // create it.
@@ -96,6 +96,9 @@ func Generate(filters ...RuleFilter) RuleList {
 		{"G503", "Import blacklist: crypto/rc4", NewBlacklistedImportRC4},
 		{"G504", "Import blacklist: net/http/cgi", NewBlacklistedImportCGI},
 		{"G505", "Import blacklist: crypto/sha1", NewBlacklistedImportSHA1},
+
+		// memory safety
+		{"G601", "Implicit memory aliasing in RangeStmt", NewImplicitAliasing},
 	}
 
 	ruleMap := make(map[string]RuleDefinition)

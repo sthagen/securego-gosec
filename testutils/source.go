@@ -1,6 +1,6 @@
 package testutils
 
-import "github.com/securego/gosec"
+import "github.com/securego/gosec/v2"
 
 // CodeSample encapsulates a snippet of source code that compiles, and how many errors should be detected
 type CodeSample struct {
@@ -69,7 +69,34 @@ const (
 )
 func main() {
 	println(ATNStateTokenStart)
-}`}, 1, gosec.NewConfig()}}
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+import "fmt"
+func main() {
+	var password string
+	if password == "f62e5bcda4fae4f82370da0c6f20697b8f8447ef" {
+		fmt.Println("password equality") 
+	}
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+import "fmt"
+func main() {
+	var password string
+	if password != "f62e5bcda4fae4f82370da0c6f20697b8f8447ef" {
+		fmt.Println("password equality") 
+	}
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+import "fmt"
+func main() {
+	var p string
+	if p != "f62e5bcda4fae4f82370da0c6f20697b8f8447ef" {
+		fmt.Println("password equality") 
+	}
+}`}, 0, gosec.NewConfig()}}
 
 	// SampleCodeG102 code snippets for network binding
 	SampleCodeG102 = []CodeSample{
@@ -1821,6 +1848,42 @@ func main() {
 		fmt.Printf("%x - %s\n", sha1.Sum([]byte(arg)), arg)
 	}
 }`}, 1, gosec.NewConfig()}}
+
+	// SampleCodeG601 - Implicit ForRange aliasing
+	SampleCodeG601 = []CodeSample{{[]string{`package main
+
+import "fmt"
+
+var vector []*string
+
+func appendVector(s *string) {
+	vector = append(vector, s)
+}
+
+func printVector() {
+	for _, item := range vector {
+		fmt.Printf("%s", *item)
+	}
+	fmt.Println()
+}
+
+func foo() (int, *string, string) {
+	for _, item := range vector {
+		return 0, &item, item
+	}
+}
+
+func main() {
+	for _, item := range []string{"A", "B", "C"} {
+		appendVector(&item)
+	}
+
+	printVector()
+
+	zero, c_star, c := foo()
+	fmt.Printf("%d %v %s", zero, c_start, c)
+}`}, 1, gosec.NewConfig()}}
+
 	// SampleCode601 - Go build tags
 	SampleCode601 = []CodeSample{{[]string{`
 // +build tag

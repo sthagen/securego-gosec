@@ -16,11 +16,12 @@ package rules
 
 import (
 	"go/ast"
+	"go/token"
 	"regexp"
 	"strconv"
 
 	zxcvbn "github.com/nbutton23/zxcvbn-go"
-	"github.com/securego/gosec"
+	"github.com/securego/gosec/v2"
 )
 
 type credentials struct {
@@ -58,6 +59,8 @@ func (r *credentials) Match(n ast.Node, ctx *gosec.Context) (*gosec.Issue, error
 		return r.matchAssign(node, ctx)
 	case *ast.ValueSpec:
 		return r.matchValueSpec(node, ctx)
+	case *ast.BinaryExpr:
+		return r.matchEqualityCheck(node, ctx)
 	}
 	return nil, nil
 }
@@ -96,6 +99,21 @@ func (r *credentials) matchValueSpec(valueSpec *ast.ValueSpec, ctx *gosec.Contex
 	return nil, nil
 }
 
+func (r *credentials) matchEqualityCheck(binaryExpr *ast.BinaryExpr, ctx *gosec.Context) (*gosec.Issue, error) {
+	if binaryExpr.Op == token.EQL || binaryExpr.Op == token.NEQ {
+		if ident, ok := binaryExpr.X.(*ast.Ident); ok {
+			if r.pattern.MatchString(ident.Name) {
+				if val, err := gosec.GetString(binaryExpr.Y); err == nil {
+					if r.ignoreEntropy || (!r.ignoreEntropy && r.isHighEntropyString(val)) {
+						return gosec.NewIssue(ctx, binaryExpr, r.ID(), r.What, r.Severity, r.Confidence), nil
+					}
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
 // NewHardcodedCredentials attempts to find high entropy string constants being
 // assigned to variables that appear to be related to credentials.
 func NewHardcodedCredentials(id string, conf gosec.Config) (gosec.Rule, []ast.Node) {
@@ -105,28 +123,36 @@ func NewHardcodedCredentials(id string, conf gosec.Config) (gosec.Rule, []ast.No
 	ignoreEntropy := false
 	var truncateString = 16
 	if val, ok := conf["G101"]; ok {
-		conf := val.(map[string]string)
+		conf := val.(map[string]interface{})
 		if configPattern, ok := conf["pattern"]; ok {
-			pattern = configPattern
+			if cfgPattern, ok := configPattern.(string); ok {
+				pattern = cfgPattern
+			}
 		}
 		if configIgnoreEntropy, ok := conf["ignore_entropy"]; ok {
-			if parsedBool, err := strconv.ParseBool(configIgnoreEntropy); err == nil {
-				ignoreEntropy = parsedBool
+			if cfgIgnoreEntropy, ok := configIgnoreEntropy.(bool); ok {
+				ignoreEntropy = cfgIgnoreEntropy
 			}
 		}
 		if configEntropyThreshold, ok := conf["entropy_threshold"]; ok {
-			if parsedNum, err := strconv.ParseFloat(configEntropyThreshold, 64); err == nil {
-				entropyThreshold = parsedNum
+			if cfgEntropyThreshold, ok := configEntropyThreshold.(string); ok {
+				if parsedNum, err := strconv.ParseFloat(cfgEntropyThreshold, 64); err == nil {
+					entropyThreshold = parsedNum
+				}
 			}
 		}
 		if configCharThreshold, ok := conf["per_char_threshold"]; ok {
-			if parsedNum, err := strconv.ParseFloat(configCharThreshold, 64); err == nil {
-				perCharThreshold = parsedNum
+			if cfgCharThreshold, ok := configCharThreshold.(string); ok {
+				if parsedNum, err := strconv.ParseFloat(cfgCharThreshold, 64); err == nil {
+					perCharThreshold = parsedNum
+				}
 			}
 		}
 		if configTruncate, ok := conf["truncate"]; ok {
-			if parsedInt, err := strconv.Atoi(configTruncate); err == nil {
-				truncateString = parsedInt
+			if cfgTruncate, ok := configTruncate.(string); ok {
+				if parsedInt, err := strconv.Atoi(cfgTruncate); err == nil {
+					truncateString = parsedInt
+				}
 			}
 		}
 	}
@@ -143,5 +169,5 @@ func NewHardcodedCredentials(id string, conf gosec.Config) (gosec.Rule, []ast.No
 			Confidence: gosec.Low,
 			Severity:   gosec.High,
 		},
-	}, []ast.Node{(*ast.AssignStmt)(nil), (*ast.ValueSpec)(nil)}
+	}, []ast.Node{(*ast.AssignStmt)(nil), (*ast.ValueSpec)(nil), (*ast.BinaryExpr)(nil)}
 }

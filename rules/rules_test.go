@@ -7,9 +7,9 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/securego/gosec"
-	"github.com/securego/gosec/rules"
-	"github.com/securego/gosec/testutils"
+	"github.com/securego/gosec/v2"
+	"github.com/securego/gosec/v2/rules"
+	"github.com/securego/gosec/v2/testutils"
 )
 
 var _ = Describe("gosec rules", func() {
@@ -170,8 +170,13 @@ var _ = Describe("gosec rules", func() {
 		It("should detect blacklisted imports - CGI (httpoxy)", func() {
 			runner("G504", testutils.SampleCodeG504)
 		})
+
 		It("should detect blacklisted imports - SHA1", func() {
 			runner("G505", testutils.SampleCodeG505)
+		})
+
+		It("should detect implicit aliasing in ForRange", func() {
+			runner("G601", testutils.SampleCodeG601)
 		})
 
 	})
