@@ -15,6 +15,8 @@
 package output
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
@@ -46,6 +48,9 @@ const (
 	// ReportJUnitXML set the output format to junit xml
 	ReportJUnitXML // JUnit XML format
 
+	// ReportSARIF set the output format to SARIF
+	ReportSARIF // SARIF format
+
 	//SonarqubeEffortMinutes effort to fix in minutes
 	SonarqubeEffortMinutes = 5
 )
@@ -59,7 +64,7 @@ Golang errors in file: [{{ $filePath }}]:
 {{end}}
 {{ range $index, $issue := .Issues }}
 [{{ highlight $issue.FileLocation $issue.Severity }}] - {{ $issue.RuleID }} (CWE-{{ $issue.Cwe.ID }}): {{ $issue.What }} (Confidence: {{ $issue.Confidence}}, Severity: {{ $issue.Severity }})
-  > {{ $issue.Code }}
+{{ printCode $issue }}
 
 {{ end }}
 {{ notice "Summary:" }}
@@ -106,6 +111,8 @@ func CreateReport(w io.Writer, format string, enableColor bool, rootPaths []stri
 		err = reportSonarqube(rootPaths, w, data)
 	case "golint":
 		err = reportGolint(w, data)
+	case "sarif":
+		err = reportSARIFTemplate(rootPaths, w, data)
 	default:
 		err = reportFromPlaintextTemplate(w, text, enableColor, data)
 	}
@@ -168,6 +175,66 @@ func convertToSonarIssues(rootPaths []string, data *reportInfo) (*sonarIssues, e
 		si.SonarIssues = append(si.SonarIssues, s)
 	}
 	return si, nil
+}
+
+func convertToSarifReport(rootPaths []string, data *reportInfo) (*sarifReport, error) {
+	sr := buildSarifReport()
+
+	type rule struct {
+		index int
+		rule  *sarifRule
+	}
+
+	rules := make([]*sarifRule, 0)
+	rulesIndices := make(map[string]rule)
+	lastRuleIndex := -1
+
+	results := []*sarifResult{}
+
+	for _, issue := range data.Issues {
+		r, ok := rulesIndices[issue.RuleID]
+		if !ok {
+			lastRuleIndex++
+			r = rule{index: lastRuleIndex, rule: buildSarifRule(issue)}
+			rulesIndices[issue.RuleID] = r
+			rules = append(rules, r.rule)
+		}
+
+		location, err := buildSarifLocation(issue, rootPaths)
+		if err != nil {
+			return nil, err
+		}
+
+		result := &sarifResult{
+			RuleID:    r.rule.ID,
+			RuleIndex: r.index,
+			Level:     getSarifLevel(issue.Severity.String()),
+			Message: &sarifMessage{
+				Text: issue.What,
+			},
+			Locations: []*sarifLocation{location},
+		}
+
+		results = append(results, result)
+	}
+
+	tool := &sarifTool{
+		Driver: &sarifDriver{
+			Name:           "gosec",
+			Version:        "2.1.0",
+			InformationURI: "https://github.com/securego/gosec/",
+			Rules:          rules,
+		},
+	}
+
+	run := &sarifRun{
+		Tool:    tool,
+		Results: results,
+	}
+
+	sr.Runs = append(sr.Runs, run)
+
+	return sr, nil
 }
 
 func reportJSON(w io.Writer, data *reportInfo) error {
@@ -240,9 +307,7 @@ func reportGolint(w io.Writer, data *reportInfo) error {
 }
 
 func reportJUnitXML(w io.Writer, data *reportInfo) error {
-	groupedData := groupDataByRules(data)
-	junitXMLStruct := createJUnitXMLStruct(groupedData)
-
+	junitXMLStruct := createJUnitXMLStruct(data)
 	raw, err := xml.MarshalIndent(junitXMLStruct, "", "\t")
 	if err != nil {
 		return err
@@ -256,6 +321,20 @@ func reportJUnitXML(w io.Writer, data *reportInfo) error {
 	}
 
 	return nil
+}
+
+func reportSARIFTemplate(rootPaths []string, w io.Writer, data *reportInfo) error {
+	sr, err := convertToSarifReport(rootPaths, data)
+	if err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(sr, "", "\t")
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(raw)
+	return err
 }
 
 func reportFromPlaintextTemplate(w io.Writer, reportTemplate string, enableColor bool, data *reportInfo) error {
@@ -286,6 +365,7 @@ func plainTextFuncMap(enableColor bool) plainTemplate.FuncMap {
 			"danger":    color.Danger.Render,
 			"notice":    color.Notice.Render,
 			"success":   color.Success.Render,
+			"printCode": printCodeSnippet,
 		}
 	}
 
@@ -294,9 +374,10 @@ func plainTextFuncMap(enableColor bool) plainTemplate.FuncMap {
 		"highlight": func(t string, s gosec.Score) string {
 			return t
 		},
-		"danger":  fmt.Sprint,
-		"notice":  fmt.Sprint,
-		"success": fmt.Sprint,
+		"danger":    fmt.Sprint,
+		"notice":    fmt.Sprint,
+		"success":   fmt.Sprint,
+		"printCode": printCodeSnippet,
 	}
 }
 
@@ -316,4 +397,42 @@ func highlight(t string, s gosec.Score) string {
 	default:
 		return defaultTheme.Sprint(t)
 	}
+}
+
+// printCodeSnippet prints the code snippet from the issue by adding a marker to the affected line
+func printCodeSnippet(issue *gosec.Issue) string {
+	start, end := parseLine(issue.Line)
+	scanner := bufio.NewScanner(strings.NewReader(issue.Code))
+	var buf bytes.Buffer
+	line := start
+	for scanner.Scan() {
+		codeLine := scanner.Text()
+		if strings.HasPrefix(codeLine, strconv.Itoa(line)) && line <= end {
+			codeLine = "  > " + codeLine + "\n"
+			line++
+		} else {
+			codeLine = "    " + codeLine + "\n"
+		}
+		buf.WriteString(codeLine)
+	}
+	return buf.String()
+}
+
+// parseLine extract the start and the end line numbers from a issue line
+func parseLine(line string) (int, int) {
+	parts := strings.Split(line, "-")
+	start := parts[0]
+	end := start
+	if len(parts) > 1 {
+		end = parts[1]
+	}
+	s, err := strconv.Atoi(start)
+	if err != nil {
+		return -1, -1
+	}
+	e, err := strconv.Atoi(end)
+	if err != nil {
+		return -1, -1
+	}
+	return s, e
 }

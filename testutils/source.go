@@ -76,7 +76,7 @@ import "fmt"
 func main() {
 	var password string
 	if password == "f62e5bcda4fae4f82370da0c6f20697b8f8447ef" {
-		fmt.Println("password equality") 
+		fmt.Println("password equality")
 	}
 }`}, 1, gosec.NewConfig()},
 		{[]string{`
@@ -85,7 +85,7 @@ import "fmt"
 func main() {
 	var password string
 	if password != "f62e5bcda4fae4f82370da0c6f20697b8f8447ef" {
-		fmt.Println("password equality") 
+		fmt.Println("password equality")
 	}
 }`}, 1, gosec.NewConfig()},
 		{[]string{`
@@ -94,7 +94,7 @@ import "fmt"
 func main() {
 	var p string
 	if p != "f62e5bcda4fae4f82370da0c6f20697b8f8447ef" {
-		fmt.Println("password equality") 
+		fmt.Println("password equality")
 	}
 }`}, 0, gosec.NewConfig()}}
 
@@ -522,7 +522,7 @@ func main() {
     }
     fmt.Println(resp.Status)
 }`}, 0, gosec.NewConfig()}, {[]string{`
-// An exported variable declared a packaged scope is not secure 
+// An exported variable declared a packaged scope is not secure
 // because it can changed at any time
 package main
 
@@ -582,7 +582,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/pprof"
 )
 
 func main() {
@@ -699,8 +698,36 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	io.Copy(os.Stdout, r)
+	_, err = io.Copy(os.Stdout, r)
+	if err != nil {
+		panic(err)
+	}
 
+	r.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+package main
+
+import (
+	"bytes"
+	"compress/zlib"
+	"io"
+	"os"
+)
+
+func main() {
+	buff := []byte{120, 156, 202, 72, 205, 201, 201, 215, 81, 40, 207,
+		47, 202, 73, 225, 2, 4, 0, 0, 255, 255, 33, 231, 4, 147}
+	b := bytes.NewReader(buff)
+
+	r, err := zlib.NewReader(b)
+	if err != nil {
+		panic(err)
+	}
+	buf := make([]byte, 8)
+	_, err = io.CopyBuffer(os.Stdout, r, buf)
+	if err != nil {
+		panic(err)
+	}
 	r.Close()
 }`}, 1, gosec.NewConfig()}, {[]string{`
 package main
@@ -788,6 +815,76 @@ func main(){
 		panic(err)
 	}
 	defer rows.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// Format string without proper quoting case insensitive
+package main
+import (
+	"database/sql"
+	"fmt"
+	"os"
+)
+
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	q := fmt.Sprintf("select * from foo where name = '%s'", os.Args[1])
+	rows, err := db.Query(q)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// Format string without proper quoting with context
+package main
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+)
+
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	q := fmt.Sprintf("select * from foo where name = '%s'", os.Args[1])
+	rows, err := db.QueryContext(context.Background(), q)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// Format string without proper quoting with transation
+package main
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+)
+
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback()
+	q := fmt.Sprintf("select * from foo where name = '%s'", os.Args[1])
+	rows, err := tx.QueryContext(context.Background(), q)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	if err := tx.Commit(); err != nil {
+		panic(err)
+	}
 }`}, 1, gosec.NewConfig()}, {[]string{`
 // Format string false positive, safe string spec.
 package main
@@ -890,6 +987,84 @@ func main(){
 		panic(err)
 	}
 	rows, err := db.Query("SELECT * FROM foo WHERE name = " + os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// case insensitive match
+package main
+import (
+	"database/sql"
+	"os"
+)
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	rows, err := db.Query("select * from foo where name = " + os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// context match
+package main
+import (
+    "context"
+	"database/sql"
+	"os"
+)
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	rows, err := db.QueryContext(context.Background(), "select * from foo where name = " + os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// DB transation check
+package main
+import (
+    "context"
+	"database/sql"
+	"os"
+)
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(context.Background(), "select * from foo where name = " + os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	if err := tx.Commit(); err != nil {
+		panic(err)
+	}
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// multiple string concatenation
+package main
+import (
+	"database/sql"
+	"os"
+)
+func main(){
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	rows, err := db.Query("SELECT * FROM foo" + "WHERE name = " + os.Args[1])
 	if err != nil {
 		panic(err)
 	}
@@ -1041,6 +1216,7 @@ func main() {
 // command line arguments as it's arguments is considered dangerous
 package main
 import (
+	"context"
 	"log"
 	"os"
 	"os/exec"
@@ -1135,7 +1311,7 @@ import (
 )
 
 func RunCmd(command string) {
-	_, err := syscall.StartProcess(command, []string{}, nil)
+	_, _, err := syscall.StartProcess(command, []string{}, nil)
 	if err != nil {
 	    fmt.Printf("Error: %v\n", err)
 	}
@@ -1331,6 +1507,30 @@ func main() {
 package main
 
 import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+)
+
+func main() {
+	http.HandleFunc("/bar", func(w http.ResponseWriter, r *http.Request) {
+  		title := r.URL.Query().Get("title")
+		f, err := os.OpenFile(title, os.O_RDWR|os.O_CREATE, 0755)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+		}
+		body := make([]byte, 5)
+		if _, err = f.Read(body); err != nil {
+			fmt.Printf("Error: %v\n", err)
+		}
+		fmt.Fprintf(w, "%s", body)
+	})
+	log.Fatal(http.ListenAndServe(":3000", nil))
+}`}, 1, gosec.NewConfig()}, {[]string{`
+package main
+
+import (
 	"log"
 	"os"
 	"io/ioutil"
@@ -1386,9 +1586,64 @@ func main() {
 		log.Printf("Error: %v\n", err)
 	}
 	log.Print(body)
-}`}, 1, gosec.NewConfig()}}
+}`}, 1, gosec.NewConfig()}, {[]string{`
+package main
 
-	// SampleCodeG305 - File path traversal when extracting zip archives
+import (
+    "os"
+    "path/filepath"
+)
+
+func main() {
+    repoFile := "path_of_file"
+    cleanRepoFile := filepath.Clean(repoFile)
+    _, err := os.OpenFile(cleanRepoFile, os.O_RDONLY, 0600)
+    if err != nil {
+        panic(err)
+    }
+}
+`}, 0, gosec.NewConfig()}, {[]string{`
+package main
+
+import (
+    "os"
+    "path/filepath"
+)
+
+func openFile(filePath string) {
+	_, err := os.OpenFile(filepath.Clean(filePath), os.O_RDONLY, 0600)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+    repoFile := "path_of_file"
+	openFile(repoFile)
+}
+`}, 0, gosec.NewConfig()}, {[]string{`
+package main
+
+import (
+    "os"
+    "path/filepath"
+)
+
+func main() {
+    repoFile := "path_of_file"
+	relFile, err := filepath.Rel("./", repoFile)
+	if err != nil {
+		panic(err)
+	}
+    _, err = os.OpenFile(relFile, os.O_RDONLY, 0600)
+    if err != nil {
+        panic(err)
+    }
+}
+
+`}, 0, gosec.NewConfig()}}
+
+	// SampleCodeG305 - File path traversal when extracting zip/tar archives
 	SampleCodeG305 = []CodeSample{{[]string{`
 package unzip
 
@@ -1480,6 +1735,76 @@ func unzip(archive, target string) error {
 	}
 
 	return nil
+}`}, 1, gosec.NewConfig()}, {[]string{`
+package zip
+
+import (
+    "archive/zip"
+    "io"
+    "os"
+    "path"
+)
+
+func extractFile(f *zip.File, destPath string) error {
+    filePath := path.Join(destPath, f.Name)
+    os.MkdirAll(path.Dir(filePath), os.ModePerm)
+
+    rc, err := f.Open()
+    if err != nil {
+        return err
+    }
+    defer rc.Close()
+
+    fw, err := os.Create(filePath)
+    if err != nil {
+        return err
+    }
+    defer fw.Close()
+
+    if _, err = io.Copy(fw, rc); err != nil {
+        return err
+    }
+
+    if f.FileInfo().Mode()&os.ModeSymlink != 0 {
+        return nil
+    }
+
+    if err = os.Chtimes(filePath, f.ModTime(), f.ModTime()); err != nil {
+        return err
+    }
+    return os.Chmod(filePath, f.FileInfo().Mode())
+}`}, 1, gosec.NewConfig()}, {[]string{`
+package tz
+
+import (
+    "archive/tar"
+    "io"
+    "os"
+    "path"
+)
+
+func extractFile(f *tar.Header, tr *tar.Reader, destPath string) error {
+    filePath := path.Join(destPath, f.Name)
+    os.MkdirAll(path.Dir(filePath), os.ModePerm)
+
+    fw, err := os.Create(filePath)
+    if err != nil {
+        return err
+    }
+    defer fw.Close()
+
+    if _, err = io.Copy(fw, tr); err != nil {
+        return err
+    }
+
+    if f.FileInfo().Mode()&os.ModeSymlink != 0 {
+        return nil
+    }
+
+    if err = os.Chtimes(filePath, f.FileInfo().ModTime(), f.FileInfo().ModTime()); err != nil {
+        return err
+    }
+    return os.Chmod(filePath, f.FileInfo().Mode())
 }`}, 1, gosec.NewConfig()}}
 
 	// SampleCodeG306 - Poor permissions for WriteFile
@@ -1500,34 +1825,34 @@ func check(e error) {
 }
 
 func main() {
-	
+
 	d1 := []byte("hello\ngo\n")
 	err := ioutil.WriteFile("/tmp/dat1", d1, 0744)
 	check(err)
 
 	allowed := ioutil.WriteFile("/tmp/dat1", d1, 0600)
 	check(allowed)
-	
+
 	f, err := os.Create("/tmp/dat2")
 	check(err)
-	
+
 	defer f.Close()
-	
+
 	d2 := []byte{115, 111, 109, 101, 10}
 	n2, err := f.Write(d2)
 
 	defer check(err)
 	fmt.Printf("wrote %d bytes\n", n2)
-	
+
 	n3, err := f.WriteString("writes\n")
 	fmt.Printf("wrote %d bytes\n", n3)
-	
+
 	f.Sync()
-	
+
 	w := bufio.NewWriter(f)
 	n4, err := w.WriteString("buffered\n")
 	fmt.Printf("wrote %d bytes\n", n4)
-	
+
 	w.Flush()
 
 }`}, 1, gosec.NewConfig()}}
@@ -1567,16 +1892,16 @@ func main() {
 
 	defer check(err)
 	fmt.Printf("wrote %d bytes\n", n2)
-	
+
 	n3, err := f.WriteString("writes\n")
 	fmt.Printf("wrote %d bytes\n", n3)
-	
+
 	f.Sync()
-	
+
 	w := bufio.NewWriter(f)
 	n4, err := w.WriteString("buffered\n")
 	fmt.Printf("wrote %d bytes\n", n4)
-	
+
 	w.Flush()
 
 }`}, 1, gosec.NewConfig()}}
@@ -1715,7 +2040,41 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-}`}, 1, gosec.NewConfig()}}
+}`}, 1, gosec.NewConfig()}, {[]string{`
+// secure max version when min version is specified
+package main
+import (
+	"crypto/tls"
+	"fmt"
+	"net/http"
+)
+func main() {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{MaxVersion: 0, MinVersion: tls.VersionTLS13},
+	}
+	client := &http.Client{Transport: tr}
+	_, err := client.Get("https://golang.org/")
+	if err != nil {
+		fmt.Println(err)
+	}
+}`}, 0, gosec.NewConfig()}, {[]string{`
+package p0
+
+import "crypto/tls"
+
+func TlsConfig0() *tls.Config {
+	var v uint16 = 0
+	return &tls.Config{MinVersion: v}
+}
+`, `
+package p0
+
+import "crypto/tls"
+
+func TlsConfig1() *tls.Config {
+   return &tls.Config{MinVersion: 0x0304}
+}
+`}, 1, gosec.NewConfig()}}
 
 	// SampleCodeG403 - weak key strength
 	SampleCodeG403 = []CodeSample{
@@ -1743,13 +2102,15 @@ import "crypto/rand"
 func main() {
 	good, _ := rand.Read(nil)
 	println(good)
-}`}, 0, gosec.NewConfig()}, {[]string{`
+}`}, 0, gosec.NewConfig()},
+		{[]string{`
 package main
 import "math/rand"
 func main() {
 	bad := rand.Int()
 	println(bad)
-}`}, 1, gosec.NewConfig()}, {[]string{`
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
 package main
 import (
 	"crypto/rand"
@@ -1758,11 +2119,30 @@ import (
 func main() {
 	good, _ := rand.Read(nil)
 	println(good)
-	i := mrand.Int31()
-	println(i)
-}`}, 0, gosec.NewConfig()}}
+	bad := mrand.Int31()
+	println(bad)
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+import (
+	"math/rand"
+)
+func main() {
+	gen := rand.New(rand.NewSource(10))
+	bad := gen.Int()
+	println(bad)
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+import (
+	"math/rand"
+)
+func main() {
+	bad := rand.Intn(10)
+	println(bad)
+}`}, 1, gosec.NewConfig()}}
 
-	// SampleCodeG501 - Blacklisted import MD5
+	// SampleCodeG501 - Blocklisted import MD5
 	SampleCodeG501 = []CodeSample{
 		{[]string{`
 package main
@@ -1777,7 +2157,7 @@ func main() {
 	}
 }`}, 1, gosec.NewConfig()}}
 
-	// SampleCodeG502 - Blacklisted import DES
+	// SampleCodeG502 - Blocklisted import DES
 	SampleCodeG502 = []CodeSample{
 		{[]string{`
 package main
@@ -1805,7 +2185,7 @@ func main() {
 	fmt.Println("Secret message is: %s", hex.EncodeToString(ciphertext))
 }`}, 1, gosec.NewConfig()}}
 
-	// SampleCodeG503 - Blacklisted import RC4
+	// SampleCodeG503 - Blocklisted import RC4
 	SampleCodeG503 = []CodeSample{{[]string{`
 package main
 import (
@@ -1824,7 +2204,7 @@ func main() {
 	fmt.Println("Secret message is: %s", hex.EncodeToString(ciphertext))
 }`}, 1, gosec.NewConfig()}}
 
-	// SampleCodeG504 - Blacklisted import CGI
+	// SampleCodeG504 - Blocklisted import CGI
 	SampleCodeG504 = []CodeSample{{[]string{`
 package main
 import (
@@ -1834,7 +2214,7 @@ import (
 func main() {
 	cgi.Serve(http.FileServer(http.Dir("/usr/share/doc")))
 }`}, 1, gosec.NewConfig()}}
-	// SampleCodeG505 - Blacklisted import SHA1
+	// SampleCodeG505 - Blocklisted import SHA1
 	SampleCodeG505 = []CodeSample{
 		{[]string{`
 package main
@@ -1849,13 +2229,14 @@ func main() {
 	}
 }`}, 1, gosec.NewConfig()}}
 
-	// SampleCodeG601 - Implicit ForRange aliasing
-	SampleCodeG601 = []CodeSample{{[]string{`package main
+	// SampleCodeG601 - Implicit aliasing over range statement
+	SampleCodeG601 = []CodeSample{
+		{[]string{`
+package main
 
 import "fmt"
 
 var vector []*string
-
 func appendVector(s *string) {
 	vector = append(vector, s)
 }
@@ -1867,10 +2248,11 @@ func printVector() {
 	fmt.Println()
 }
 
-func foo() (int, *string, string) {
+func foo() (int, **string, *string) {
 	for _, item := range vector {
 		return 0, &item, item
 	}
+	return 0, nil, nil
 }
 
 func main() {
@@ -1881,13 +2263,27 @@ func main() {
 	printVector()
 
 	zero, c_star, c := foo()
-	fmt.Printf("%d %v %s", zero, c_start, c)
-}`}, 1, gosec.NewConfig()}}
+	fmt.Printf("%d %v %s", zero, c_star, c)
+}`,
+		}, 1, gosec.NewConfig()},
+		{[]string{`
+// see: github.com/securego/gosec/issues/475
+package main
+import (
+    "fmt"
+)
+func main() {
+    sampleMap := map[string]string{}
+    sampleString := "A string"
+    for sampleString, _ = range sampleMap {
+        fmt.Println(sampleString)
+    }
+}`}, 0, gosec.NewConfig()},
+	}
 
-	// SampleCode601 - Go build tags
-	SampleCode601 = []CodeSample{{[]string{`
+	// SampleCodeBuildTag - G601 build tags
+	SampleCodeBuildTag = []CodeSample{{[]string{`
 // +build tag
-
 package main
 func main() {
   fmt.Println("no package imported error")

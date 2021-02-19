@@ -73,7 +73,7 @@ var (
 	flagIgnoreNoSec = flag.Bool("nosec", false, "Ignores #nosec comments when set")
 
 	// format output
-	flagFormat = flag.String("fmt", "text", "Set output format. Valid options are: json, yaml, csv, junit-xml, html, sonarqube, golint or text")
+	flagFormat = flag.String("fmt", "text", "Set output format. Valid options are: json, yaml, csv, junit-xml, html, sonarqube, golint, sarif or text")
 
 	// #nosec alternative tag
 	flagAlternativeNoSec = flag.String("nosec-tag", "", "Set an alternative string for #nosec. Some examples: #dontanalyze, #falsepositive")
@@ -240,6 +240,9 @@ func filterIssues(issues []*gosec.Issue, severity gosec.Score, confidence gosec.
 }
 
 func main() {
+	// Makes sure some version information is set
+	prepareVersionInfo()
+
 	// Setup usage description
 	flag.Usage = usage
 
@@ -248,6 +251,10 @@ func main() {
 	err := flag.Set("exclude-dir", "vendor")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: failed to exclude the %q directory from scan", "vendor")
+	}
+	err = flag.Set("exclude-dir", ".git")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nError: failed to exclude the %q directory from scan", ".git")
 	}
 
 	// Parse command line arguments

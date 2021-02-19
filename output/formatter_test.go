@@ -12,6 +12,13 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+func createIssueWithFileWhat(file, what string) *gosec.Issue {
+	issue := createIssue("i1", gosec.GetCwe("G101"))
+	issue.File = file
+	issue.What = what
+	return &issue
+}
+
 func createIssue(ruleID string, cwe gosec.Cwe) gosec.Issue {
 	return gosec.Issue{
 		File:       "/home/src/project/test.go",
@@ -21,7 +28,7 @@ func createIssue(ruleID string, cwe gosec.Cwe) gosec.Issue {
 		What:       "test",
 		Confidence: gosec.High,
 		Severity:   gosec.High,
-		Code:       "testcode",
+		Code:       "1: testcode",
 		Cwe:        cwe,
 	}
 }
@@ -248,6 +255,23 @@ var _ = Describe("Formatter", func() {
 			Expect(*issues).To(Equal(*want))
 		})
 	})
+
+	Context("When using junit", func() {
+		It("preserves order of issues", func() {
+			issues := []*gosec.Issue{createIssueWithFileWhat("i1", "1"), createIssueWithFileWhat("i2", "2"), createIssueWithFileWhat("i3", "1")}
+
+			junitReport := createJUnitXMLStruct(&reportInfo{Issues: issues})
+
+			testSuite := junitReport.Testsuites[0]
+
+			Expect(testSuite.Testcases[0].Name).To(Equal(issues[0].File))
+			Expect(testSuite.Testcases[1].Name).To(Equal(issues[2].File))
+
+			testSuite = junitReport.Testsuites[1]
+			Expect(testSuite.Testcases[0].Name).To(Equal(issues[1].File))
+
+		})
+	})
 	Context("When using different report formats", func() {
 
 		grules := []string{"G101", "G102", "G103", "G104", "G106",
@@ -264,7 +288,7 @@ var _ = Describe("Formatter", func() {
 				buf := new(bytes.Buffer)
 				err := CreateReport(buf, "csv", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
 				Expect(err).ShouldNot(HaveOccurred())
-				pattern := "/home/src/project/test.go,1,test,HIGH,HIGH,testcode,CWE-%s\n"
+				pattern := "/home/src/project/test.go,1,test,HIGH,HIGH,1: testcode,CWE-%s\n"
 				expect := fmt.Sprintf(pattern, cwe.ID)
 				Expect(string(buf.String())).To(Equal(expect))
 			}
@@ -278,7 +302,7 @@ var _ = Describe("Formatter", func() {
 				buf := new(bytes.Buffer)
 				err := CreateReport(buf, "xml", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{NumFiles: 0, NumLines: 0, NumNosec: 0, NumFound: 0}, error)
 				Expect(err).ShouldNot(HaveOccurred())
-				pattern := "Results:\n\n\n[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)\n  > testcode\n\n\nSummary:\n   Files: 0\n   Lines: 0\n   Nosec: 0\n  Issues: 0\n\n"
+				pattern := "Results:\n\n\n[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)\n  > 1: testcode\n\n\n\nSummary:\n   Files: 0\n   Lines: 0\n   Nosec: 0\n  Issues: 0\n\n"
 				expect := fmt.Sprintf(pattern, rule, cwe.ID)
 				Expect(string(buf.String())).To(Equal(expect))
 			}
@@ -415,6 +439,25 @@ var _ = Describe("Formatter", func() {
 				pattern := "/home/src/project/test.go:1:1: [CWE-%s] test (Rule:%s, Severity:HIGH, Confidence:HIGH)\n"
 				expect := fmt.Sprintf(pattern, cwe.ID, rule)
 				Expect(string(buf.String())).To(Equal(expect))
+			}
+		})
+		It("sarif formatted report should contain the CWE mapping", func() {
+			for _, rule := range grules {
+				cwe := gosec.IssueToCWE[rule]
+				issue := createIssue(rule, cwe)
+				error := map[string][]gosec.Error{}
+
+				buf := new(bytes.Buffer)
+				err := CreateReport(buf, "sarif", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				Expect(err).ShouldNot(HaveOccurred())
+
+				result := stripString(buf.String())
+
+				pattern := "rules\":[{\"id\":\"%s(CWE-%s)\""
+				expect := fmt.Sprintf(pattern, rule, cwe.ID)
+				Expect(err).ShouldNot(HaveOccurred())
+
+				Expect(result).To(ContainSubstring(expect))
 			}
 		})
 	})
