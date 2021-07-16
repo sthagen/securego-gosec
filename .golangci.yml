@@ -1,0 +1,31 @@
+linters:
+  enable:
+  - asciicheck
+  - bodyclose
+  - deadcode
+  - depguard
+  - dogsled
+  - durationcheck
+  - errcheck
+  - exportloopref
+  - gofmt
+  - gofumpt
+  - goimports
+  - gosec
+  - gosimple
+  - govet
+  - importas
+  - ineffassign
+  - megacheck
+  - misspell
+  - nakedret
+  - nolintlint
+  - revive
+  - staticcheck
+  - structcheck
+  - typecheck
+  - unconvert
+  - unparam
+  - unused
+  - varcheck
+  - wastedassign

@@ -14,7 +14,7 @@ import (
 )
 
 var _ = Describe("Helpers", func() {
-	Context("when listing pacakge paths", func() {
+	Context("when listing package paths", func() {
 		var dir string
 		JustBeforeEach(func() {
 			var err error
@@ -230,7 +230,7 @@ var _ = Describe("Helpers", func() {
 		})
 	})
 	Context("when getting binary expression operands", func() {
-		It("should return all operands of a binary experssion", func() {
+		It("should return all operands of a binary expression", func() {
 			pkg := testutils.NewTestPackage()
 			defer pkg.Close()
 			pkg.AddFile("main.go", `
@@ -260,7 +260,7 @@ var _ = Describe("Helpers", func() {
 			operands := gosec.GetBinaryExprOperands(be)
 			Expect(len(operands)).Should(Equal(2))
 		})
-		It("should return all operands of complex binary experssion", func() {
+		It("should return all operands of complex binary expression", func() {
 			pkg := testutils.NewTestPackage()
 			defer pkg.Close()
 			pkg.AddFile("main.go", `

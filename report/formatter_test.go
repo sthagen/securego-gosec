@@ -1,4 +1,4 @@
-package output
+package report
 
 import (
 	"bytes"
@@ -9,17 +9,20 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/securego/gosec/v2"
+	"github.com/securego/gosec/v2/cwe"
+	"github.com/securego/gosec/v2/report/junit"
+	"github.com/securego/gosec/v2/report/sonar"
 	"gopkg.in/yaml.v2"
 )
 
 func createIssueWithFileWhat(file, what string) *gosec.Issue {
-	issue := createIssue("i1", gosec.GetCwe("G101"))
+	issue := createIssue("i1", gosec.GetCweByRule("G101"))
 	issue.File = file
 	issue.What = what
 	return &issue
 }
 
-func createIssue(ruleID string, cwe gosec.Cwe) gosec.Issue {
+func createIssue(ruleID string, weakness *cwe.Weakness) gosec.Issue {
 	return gosec.Issue{
 		File:       "/home/src/project/test.go",
 		Line:       "1",
@@ -29,14 +32,14 @@ func createIssue(ruleID string, cwe gosec.Cwe) gosec.Issue {
 		Confidence: gosec.High,
 		Severity:   gosec.High,
 		Code:       "1: testcode",
-		Cwe:        cwe,
+		Cwe:        weakness,
 	}
 }
 
-func createReportInfo(rule string, cwe gosec.Cwe) reportInfo {
-	issue := createIssue(rule, cwe)
+func createReportInfo(rule string, weakness *cwe.Weakness) gosec.ReportInfo {
+	issue := createIssue(rule, weakness)
 	metrics := gosec.Metrics{}
-	return reportInfo{
+	return gosec.ReportInfo{
 		Errors: map[string][]gosec.Error{},
 		Issues: []*gosec.Issue{
 			&issue,
@@ -57,10 +60,10 @@ var _ = Describe("Formatter", func() {
 	})
 	Context("when converting to Sonarqube issues", func() {
 		It("it should parse the report info", func() {
-			data := &reportInfo{
+			data := &gosec.ReportInfo{
 				Errors: map[string][]gosec.Error{},
 				Issues: []*gosec.Issue{
-					&gosec.Issue{
+					{
 						Severity:   2,
 						Confidence: 0,
 						RuleID:     "test",
@@ -77,38 +80,38 @@ var _ = Describe("Formatter", func() {
 					NumFound: 0,
 				},
 			}
-			want := &sonarIssues{
-				SonarIssues: []sonarIssue{
+			want := &sonar.Report{
+				Issues: []*sonar.Issue{
 					{
 						EngineID: "gosec",
 						RuleID:   "test",
-						PrimaryLocation: location{
+						PrimaryLocation: &sonar.Location{
 							Message:  "test",
 							FilePath: "test.go",
-							TextRange: textRange{
+							TextRange: &sonar.TextRange{
 								StartLine: 1,
 								EndLine:   2,
 							},
 						},
 						Type:          "VULNERABILITY",
 						Severity:      "BLOCKER",
-						EffortMinutes: SonarqubeEffortMinutes,
+						EffortMinutes: sonar.EffortMinutes,
 					},
 				},
 			}
 
 			rootPath := "/home/src/project"
 
-			issues, err := convertToSonarIssues([]string{rootPath}, data)
+			issues, err := sonar.GenerateReport([]string{rootPath}, data)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(*issues).To(Equal(*want))
 		})
 
 		It("it should parse the report info with files in subfolders", func() {
-			data := &reportInfo{
+			data := &gosec.ReportInfo{
 				Errors: map[string][]gosec.Error{},
 				Issues: []*gosec.Issue{
-					&gosec.Issue{
+					{
 						Severity:   2,
 						Confidence: 0,
 						RuleID:     "test",
@@ -125,37 +128,37 @@ var _ = Describe("Formatter", func() {
 					NumFound: 0,
 				},
 			}
-			want := &sonarIssues{
-				SonarIssues: []sonarIssue{
+			want := &sonar.Report{
+				Issues: []*sonar.Issue{
 					{
 						EngineID: "gosec",
 						RuleID:   "test",
-						PrimaryLocation: location{
+						PrimaryLocation: &sonar.Location{
 							Message:  "test",
 							FilePath: "subfolder/test.go",
-							TextRange: textRange{
+							TextRange: &sonar.TextRange{
 								StartLine: 1,
 								EndLine:   2,
 							},
 						},
 						Type:          "VULNERABILITY",
 						Severity:      "BLOCKER",
-						EffortMinutes: SonarqubeEffortMinutes,
+						EffortMinutes: sonar.EffortMinutes,
 					},
 				},
 			}
 
 			rootPath := "/home/src/project"
 
-			issues, err := convertToSonarIssues([]string{rootPath}, data)
+			issues, err := sonar.GenerateReport([]string{rootPath}, data)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(*issues).To(Equal(*want))
 		})
 		It("it should not parse the report info for files from other projects", func() {
-			data := &reportInfo{
+			data := &gosec.ReportInfo{
 				Errors: map[string][]gosec.Error{},
 				Issues: []*gosec.Issue{
-					&gosec.Issue{
+					{
 						Severity:   2,
 						Confidence: 0,
 						RuleID:     "test",
@@ -172,22 +175,22 @@ var _ = Describe("Formatter", func() {
 					NumFound: 0,
 				},
 			}
-			want := &sonarIssues{
-				SonarIssues: []sonarIssue{},
+			want := &sonar.Report{
+				Issues: []*sonar.Issue{},
 			}
 
 			rootPath := "/home/src/project2"
 
-			issues, err := convertToSonarIssues([]string{rootPath}, data)
+			issues, err := sonar.GenerateReport([]string{rootPath}, data)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(*issues).To(Equal(*want))
 		})
 
 		It("it should parse the report info for multiple projects projects", func() {
-			data := &reportInfo{
+			data := &gosec.ReportInfo{
 				Errors: map[string][]gosec.Error{},
 				Issues: []*gosec.Issue{
-					&gosec.Issue{
+					{
 						Severity:   2,
 						Confidence: 0,
 						RuleID:     "test",
@@ -196,7 +199,7 @@ var _ = Describe("Formatter", func() {
 						Code:       "",
 						Line:       "1-2",
 					},
-					&gosec.Issue{
+					{
 						Severity:   2,
 						Confidence: 0,
 						RuleID:     "test",
@@ -213,44 +216,44 @@ var _ = Describe("Formatter", func() {
 					NumFound: 0,
 				},
 			}
-			want := &sonarIssues{
-				SonarIssues: []sonarIssue{
+			want := &sonar.Report{
+				Issues: []*sonar.Issue{
 					{
 						EngineID: "gosec",
 						RuleID:   "test",
-						PrimaryLocation: location{
+						PrimaryLocation: &sonar.Location{
 							Message:  "test",
 							FilePath: "test-project1.go",
-							TextRange: textRange{
+							TextRange: &sonar.TextRange{
 								StartLine: 1,
 								EndLine:   2,
 							},
 						},
 						Type:          "VULNERABILITY",
 						Severity:      "BLOCKER",
-						EffortMinutes: SonarqubeEffortMinutes,
+						EffortMinutes: sonar.EffortMinutes,
 					},
 					{
 						EngineID: "gosec",
 						RuleID:   "test",
-						PrimaryLocation: location{
+						PrimaryLocation: &sonar.Location{
 							Message:  "test",
 							FilePath: "test-project2.go",
-							TextRange: textRange{
+							TextRange: &sonar.TextRange{
 								StartLine: 1,
 								EndLine:   2,
 							},
 						},
 						Type:          "VULNERABILITY",
 						Severity:      "BLOCKER",
-						EffortMinutes: SonarqubeEffortMinutes,
+						EffortMinutes: sonar.EffortMinutes,
 					},
 				},
 			}
 
 			rootPaths := []string{"/home/src/project1", "/home/src/project2"}
 
-			issues, err := convertToSonarIssues(rootPaths, data)
+			issues, err := sonar.GenerateReport(rootPaths, data)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(*issues).To(Equal(*want))
 		})
@@ -260,7 +263,7 @@ var _ = Describe("Formatter", func() {
 		It("preserves order of issues", func() {
 			issues := []*gosec.Issue{createIssueWithFileWhat("i1", "1"), createIssueWithFileWhat("i2", "2"), createIssueWithFileWhat("i3", "1")}
 
-			junitReport := createJUnitXMLStruct(&reportInfo{Issues: issues})
+			junitReport := junit.GenerateReport(&gosec.ReportInfo{Issues: issues})
 
 			testSuite := junitReport.Testsuites[0]
 
@@ -269,47 +272,49 @@ var _ = Describe("Formatter", func() {
 
 			testSuite = junitReport.Testsuites[1]
 			Expect(testSuite.Testcases[0].Name).To(Equal(issues[1].File))
-
 		})
 	})
 	Context("When using different report formats", func() {
-
-		grules := []string{"G101", "G102", "G103", "G104", "G106",
+		grules := []string{
+			"G101", "G102", "G103", "G104", "G106",
 			"G107", "G109", "G110", "G201", "G202", "G203", "G204",
 			"G301", "G302", "G303", "G304", "G305", "G401", "G402",
-			"G403", "G404", "G501", "G502", "G503", "G504", "G505"}
+			"G403", "G404", "G501", "G502", "G503", "G504", "G505",
+		}
 
 		It("csv formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
 				buf := new(bytes.Buffer)
-				err := CreateReport(buf, "csv", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err := CreateReport(buf, "csv", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				pattern := "/home/src/project/test.go,1,test,HIGH,HIGH,1: testcode,CWE-%s\n"
 				expect := fmt.Sprintf(pattern, cwe.ID)
-				Expect(string(buf.String())).To(Equal(expect))
+				Expect(buf.String()).To(Equal(expect))
 			}
 		})
 		It("xml formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
 				buf := new(bytes.Buffer)
-				err := CreateReport(buf, "xml", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{NumFiles: 0, NumLines: 0, NumNosec: 0, NumFound: 0}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{NumFiles: 0, NumLines: 0, NumNosec: 0, NumFound: 0}, error).WithVersion("v2.7.0")
+				err := CreateReport(buf, "xml", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
-				pattern := "Results:\n\n\n[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)\n  > 1: testcode\n\n\n\nSummary:\n   Files: 0\n   Lines: 0\n   Nosec: 0\n  Issues: 0\n\n"
+				pattern := "Results:\n\n\n[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)\n  > 1: testcode\n\n\n\nSummary:\n  Gosec  : v2.7.0\n  Files  : 0\n  Lines  : 0\n  Nosec  : 0\n  Issues : 0\n\n"
 				expect := fmt.Sprintf(pattern, rule, cwe.ID)
-				Expect(string(buf.String())).To(Equal(expect))
+				Expect(buf.String()).To(Equal(expect))
 			}
 		})
 		It("json formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
@@ -320,7 +325,8 @@ var _ = Describe("Formatter", func() {
 				err := enc.Encode(data)
 				Expect(err).ShouldNot(HaveOccurred())
 				buf := new(bytes.Buffer)
-				err = CreateReport(buf, "json", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err = CreateReport(buf, "json", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				result := stripString(buf.String())
 				expectation := stripString(expect.String())
@@ -329,7 +335,7 @@ var _ = Describe("Formatter", func() {
 		})
 		It("html formatted report should  contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
@@ -340,7 +346,8 @@ var _ = Describe("Formatter", func() {
 				err := enc.Encode(data)
 				Expect(err).ShouldNot(HaveOccurred())
 				buf := new(bytes.Buffer)
-				err = CreateReport(buf, "html", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err = CreateReport(buf, "html", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				result := stripString(buf.String())
 				expectation := stripString(expect.String())
@@ -349,7 +356,7 @@ var _ = Describe("Formatter", func() {
 		})
 		It("yaml formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
@@ -360,7 +367,8 @@ var _ = Describe("Formatter", func() {
 				err := enc.Encode(data)
 				Expect(err).ShouldNot(HaveOccurred())
 				buf := new(bytes.Buffer)
-				err = CreateReport(buf, "yaml", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err = CreateReport(buf, "yaml", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				result := stripString(buf.String())
 				expectation := stripString(expect.String())
@@ -369,7 +377,7 @@ var _ = Describe("Formatter", func() {
 		})
 		It("junit-xml formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
@@ -380,7 +388,8 @@ var _ = Describe("Formatter", func() {
 				err := enc.Encode(data)
 				Expect(err).ShouldNot(HaveOccurred())
 				buf := new(bytes.Buffer)
-				err = CreateReport(buf, "junit-xml", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err = CreateReport(buf, "junit-xml", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				expectation := stripString(fmt.Sprintf("[/home/src/project/test.go:1] - test (Confidence: 2, Severity: 2, CWE: %s)", cwe.ID))
 				result := stripString(buf.String())
@@ -389,7 +398,7 @@ var _ = Describe("Formatter", func() {
 		})
 		It("text formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
@@ -400,20 +409,22 @@ var _ = Describe("Formatter", func() {
 				err := enc.Encode(data)
 				Expect(err).ShouldNot(HaveOccurred())
 				buf := new(bytes.Buffer)
-				err = CreateReport(buf, "text", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err = CreateReport(buf, "text", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				expectation := stripString(fmt.Sprintf("[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)", rule, cwe.ID))
 				result := stripString(buf.String())
 				Expect(result).To(ContainSubstring(expectation))
 			}
 		})
-		It("sonarqube formatted report should contain the CWE mapping", func() {
+		It("sonarqube formatted report shouldn't contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 				buf := new(bytes.Buffer)
-				err := CreateReport(buf, "sonarqube", false, []string{"/home/src/project"}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err := CreateReport(buf, "sonarqube", false, []string{"/home/src/project"}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 
 				result := stripString(buf.String())
@@ -424,40 +435,54 @@ var _ = Describe("Formatter", func() {
 				Expect(err).ShouldNot(HaveOccurred())
 
 				expectation := stripString(expect.String())
-				Expect(result).To(ContainSubstring(expectation))
+				Expect(result).ShouldNot(ContainSubstring(expectation))
 			}
 		})
 		It("golint formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
 				buf := new(bytes.Buffer)
-				err := CreateReport(buf, "golint", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				err := CreateReport(buf, "golint", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 				pattern := "/home/src/project/test.go:1:1: [CWE-%s] test (Rule:%s, Severity:HIGH, Confidence:HIGH)\n"
 				expect := fmt.Sprintf(pattern, cwe.ID, rule)
-				Expect(string(buf.String())).To(Equal(expect))
+				Expect(buf.String()).To(Equal(expect))
 			}
 		})
 		It("sarif formatted report should contain the CWE mapping", func() {
 			for _, rule := range grules {
-				cwe := gosec.IssueToCWE[rule]
+				cwe := gosec.GetCweByRule(rule)
 				issue := createIssue(rule, cwe)
 				error := map[string][]gosec.Error{}
 
 				buf := new(bytes.Buffer)
-				err := CreateReport(buf, "sarif", false, []string{}, []*gosec.Issue{&issue}, &gosec.Metrics{}, error)
+				reportInfo := gosec.NewReportInfo([]*gosec.Issue{&issue}, &gosec.Metrics{}, error).WithVersion("v2.7.0")
+				err := CreateReport(buf, "sarif", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
 
 				result := stripString(buf.String())
 
-				pattern := "rules\":[{\"id\":\"%s(CWE-%s)\""
-				expect := fmt.Sprintf(pattern, rule, cwe.ID)
+				ruleIDPattern := "\"id\":\"%s\""
+				expectedRule := fmt.Sprintf(ruleIDPattern, rule)
 				Expect(err).ShouldNot(HaveOccurred())
 
-				Expect(result).To(ContainSubstring(expect))
+				Expect(result).To(ContainSubstring(expectedRule))
+
+				cweURIPattern := "\"helpUri\":\"https://cwe.mitre.org/data/definitions/%s.html\""
+				expectedCweURI := fmt.Sprintf(cweURIPattern, cwe.ID)
+				Expect(err).ShouldNot(HaveOccurred())
+
+				Expect(result).To(ContainSubstring(expectedCweURI))
+
+				cweIDPattern := "\"id\":\"%s\""
+				expectedCweID := fmt.Sprintf(cweIDPattern, cwe.ID)
+				Expect(err).ShouldNot(HaveOccurred())
+
+				Expect(result).To(ContainSubstring(expectedCweID))
 			}
 		})
 	})
