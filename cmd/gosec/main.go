@@ -23,6 +23,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/securego/gosec/v2/cmd/vflag"
+
 	"github.com/securego/gosec/v2"
 	"github.com/securego/gosec/v2/report"
 	"github.com/securego/gosec/v2/rules"
@@ -72,6 +74,9 @@ var (
 	// #nosec flag
 	flagIgnoreNoSec = flag.Bool("nosec", false, "Ignores #nosec comments when set")
 
+	// show ignored
+	flagShowIgnored = flag.Bool("show-ignored", false, "If enabled, ignored issues are printed")
+
 	// format output
 	flagFormat = flag.String("fmt", "text", "Set output format. Valid options are: json, yaml, csv, junit-xml, html, sonarqube, golint, sarif or text")
 
@@ -91,11 +96,13 @@ var (
 	flagRulesInclude = flag.String("include", "", "Comma separated list of rules IDs to include. (see rule list)")
 
 	// rules to explicitly exclude
-	flagRulesExclude = flag.String("exclude", "", "Comma separated list of rules IDs to exclude. (see rule list)")
+	flagRulesExclude = vflag.ValidatedFlag{}
+
+	// rules to explicitly exclude
+	flagExcludeGenerated = flag.Bool("exclude-generated", false, "Exclude generated files")
 
 	// log to file or stderr
 	flagLogfile = flag.String("log", "", "Log messages to file rather than stderr")
-
 	// sort the issues by severity
 	flagSortIssues = flag.Bool("sort", true, "Sort issues by severity")
 
@@ -170,6 +177,9 @@ func loadConfig(configFile string) (gosec.Config, error) {
 	if *flagIgnoreNoSec {
 		config.SetGlobal(gosec.Nosec, "true")
 	}
+	if *flagShowIgnored {
+		config.SetGlobal(gosec.ShowIgnored, "true")
+	}
 	if *flagAlternativeNoSec != "" {
 		config.SetGlobal(gosec.NoSecAlternative, *flagAlternativeNoSec)
 	}
@@ -197,7 +207,7 @@ func loadRules(include, exclude string) rules.RuleList {
 }
 
 func getRootPaths(paths []string) []string {
-	rootPaths := []string{}
+	rootPaths := make([]string, 0)
 	for _, path := range paths {
 		rootPath, err := gosec.RootPath(path)
 		if err != nil {
@@ -252,14 +262,18 @@ func convertToScore(severity string) (gosec.Score, error) {
 	}
 }
 
-func filterIssues(issues []*gosec.Issue, severity gosec.Score, confidence gosec.Score) []*gosec.Issue {
-	result := []*gosec.Issue{}
+func filterIssues(issues []*gosec.Issue, severity gosec.Score, confidence gosec.Score) ([]*gosec.Issue, int) {
+	result := make([]*gosec.Issue, 0)
+	trueIssues := 0
 	for _, issue := range issues {
 		if issue.Severity >= severity && issue.Confidence >= confidence {
 			result = append(result, issue)
+			if !issue.NoSec || !*flagShowIgnored {
+				trueIssues++
+			}
 		}
 	}
-	return result
+	return result, trueIssues
 }
 
 func main() {
@@ -279,6 +293,9 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: failed to exclude the %q directory from scan", ".git")
 	}
+
+	// set for exclude
+	flag.Var(&flagRulesExclude, "exclude", "Comma separated list of rules IDs to exclude. (see rule list)")
 
 	// Parse command line arguments
 	flag.Parse()
@@ -329,13 +346,13 @@ func main() {
 	}
 
 	// Load enabled rule definitions
-	ruleDefinitions := loadRules(*flagRulesInclude, *flagRulesExclude)
+	ruleDefinitions := loadRules(*flagRulesInclude, flagRulesExclude.String())
 	if len(ruleDefinitions) == 0 {
 		logger.Fatal("No rules are configured")
 	}
 
 	// Create the analyzer
-	analyzer := gosec.NewAnalyzer(config, *flagScanTests, logger)
+	analyzer := gosec.NewAnalyzer(config, *flagScanTests, *flagExcludeGenerated, logger)
 	analyzer.LoadRules(ruleDefinitions.Builders())
 
 	excludedDirs := gosec.ExcludedDirsRegExp(flagDirsExclude)
@@ -369,9 +386,10 @@ func main() {
 	}
 
 	// Filter the issues by severity and confidence
-	issues = filterIssues(issues, failSeverity, failConfidence)
-	if metrics.NumFound != len(issues) {
-		metrics.NumFound = len(issues)
+	var trueIssues int
+	issues, trueIssues = filterIssues(issues, failSeverity, failConfidence)
+	if metrics.NumFound != trueIssues {
+		metrics.NumFound = trueIssues
 	}
 
 	// Exit quietly if nothing was found
@@ -387,7 +405,7 @@ func main() {
 	if *flagOutput == "" || *flagStdOut {
 		fileFormat := getPrintedFormat(*flagFormat, *flagVerbose)
 		if err := printReport(fileFormat, *flagColor, rootPaths, reportInfo); err != nil {
-			logger.Fatal((err))
+			logger.Fatal(err)
 		}
 	}
 	if *flagOutput != "" {

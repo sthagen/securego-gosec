@@ -41,6 +41,15 @@ const templateContent = `
   .tag {
     width: 80px;
   }
+  .summary-first {
+    padding: .75rem .75rem .1rem .75rem;
+  }
+  .summary-last {
+    padding: .1rem .75rem .75rem .75rem;
+  }
+  .summary {
+    padding: .1rem .75rem ;
+  }
   </style>
 </head>
 <body>
@@ -62,6 +71,8 @@ const templateContent = `
           level += " is-warning";
         } else if (this.props.level === "LOW") {
           level += " is-info";
+        } else if (this.props.level === "WAIVED") {
+          level += " is-success";
         }
         level +=" is-rounded";
         return (
@@ -92,17 +103,18 @@ const templateContent = `
           <div className="columns">
               <div className="column is-three-quarters">
                 <strong className="break-word">{ this.props.data.file } (line { this.props.data.line })</strong>
-                <p>{ this.props.data.details }</p>
+                <p>{this.props.data.rule_id} (CWE-{this.props.data.cwe.id}): { this.props.data.details }</p>
               </div>
               <div className="column is-one-quarter">
                 <div className="field is-grouped is-grouped-multiline">
+                  {this.props.data.nosec && <IssueTag label="NoSec" level="WAIVED"/>}
                   <IssueTag label="Severity" level={ this.props.data.severity }/>
                   <IssueTag label="Confidence" level={ this.props.data.confidence }/>
                 </div>
               </div>
             </div>
             <div className="highlight">
-              <Highlight code={ this.props.data.code }/>
+              <Highlight key={ this.props.data.file + this.props.data.line } code={ this.props.data.code }/>
             </div>
           </div>
         );
@@ -248,50 +260,89 @@ const templateContent = `
             );
           }.bind(this));
         return (
-          <nav className="panel">
-            <div className="panel-heading">Filters</div>
-            <div className="panel-block">
-              <div className="field is-horizontal">
-                <div className="field-label is-normal">
-                  <label className="label is-pulled-left">Severity</label>
+          <div>
+              <nav className="panel">
+                <div className="panel-heading">Filters</div>
+                <div className="panel-block">
+                  <div className="field is-horizontal">
+                    <div className="field-label is-normal">
+                      <label className="label is-pulled-left">Severity</label>
+                    </div>
+                    <div className="field-body">
+                      <LevelSelector selected={ this.props.severity } available={ this.props.allSeverities } onChange={ this.updateSeverity } />
+                    </div>
+                 </div>
                 </div>
-                <div className="field-body">
-                  <LevelSelector selected={ this.props.severity } available={ this.props.allSeverities } onChange={ this.updateSeverity } />
+                <div className="panel-block">
+                  <div className="field is-horizontal">
+                    <div className="field-label is-normal">
+                      <label className="label is-pulled-left">Confidence</label>
+                    </div>
+                    <div className="field-body">
+                      <LevelSelector selected={ this.props.confidence } available={ this.props.allConfidences } onChange={ this.updateConfidence } />
+                    </div>
+                  </div>
                 </div>
-             </div>
-            </div>
-            <div className="panel-block">
-              <div className="field is-horizontal">
-                <div className="field-label is-normal">
-                  <label className="label is-pulled-left">Confidence</label>
-                </div>
-                <div className="field-body">
-                  <LevelSelector selected={ this.props.confidence } available={ this.props.allConfidences } onChange={ this.updateConfidence } />
-                </div>
-              </div>
-            </div>
-            <div className="panel-block">
-              <div className="field is-horizontal">
-                <div className="field-label is-normal">
-                  <label className="label is-pulled-left">Issue type</label>
-                </div>
-                <div className="field-body">
-                  <div className="field">
-                    <div className="control">
-                      <div className="select is-fullwidth">
-                        <select onChange={ this.updateIssueType }>
-                          <option value="all" selected={ !this.props.issueType }>
-                            (all)
-                          </option>
-                          { issueTypes }
-                        </select>
+                <div className="panel-block">
+                  <div className="field is-horizontal">
+                    <div className="field-label is-normal">
+                      <label className="label is-pulled-left">Issue type</label>
+                    </div>
+                    <div className="field-body">
+                      <div className="field">
+                        <div className="control">
+                          <div className="select is-fullwidth">
+                            <select onChange={ this.updateIssueType }>
+                              <option value="all" selected={ !this.props.issueType }>
+                                (all)
+                              </option>
+                              { issueTypes }
+                            </select>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          </nav>
+              </nav>
+              <nav className="panel">
+                <div className="panel-heading">Summary</div>
+                  <div className="panel-block">
+                      <div className="columns is-multiline">
+                          <div className="column is-half summary-first">
+                              <label className="label is-pulled-left">Gosec: </label>
+                          </div>
+                          <div className="column is-half summary-first">
+                              {this.props.data.GosecVersion}
+                          </div>
+                          <div className="column is-half summary">
+                              <label className="label is-pulled-left">Files: </label>
+                          </div>
+                          <div className="column is-half summary">
+                              {this.props.data.Stats.files.toLocaleString()}
+                          </div>
+                          <div className="column is-half summary">
+                              <label className="label is-pulled-left">Lines: </label>
+                          </div>
+                          <div className="column is-half summary">
+                              {this.props.data.Stats.lines.toLocaleString()}
+                          </div>
+                          <div className="column is-half summary">
+                              <label className="label is-pulled-left">Nosec: </label>
+                          </div>
+                          <div className="column is-half summary">
+                              {this.props.data.Stats.nosec.toLocaleString()}
+                          </div>
+                          <div className="column is-half summary-last">
+                              <label className="label is-pulled-left">Issues: </label>
+                          </div>
+                          <div className="column is-half summary-last">
+                              {this.props.data.Stats.found.toLocaleString()}
+                          </div>
+                      </div>
+                  </div>
+              </nav>
+          </div>
         );
       }
     });
@@ -372,6 +423,7 @@ const templateContent = `
             <div className="columns">
               <div className="column is-one-quarter">
                 <Navigation
+                  data={ this.props.data }
                   severity={ this.state.severity } 
                   confidence={ this.state.confidence }
                   issueType={ this.state.issueType }
