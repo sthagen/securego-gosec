@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/securego/gosec/v2"
 	"github.com/securego/gosec/v2/cwe"
@@ -276,10 +276,10 @@ var _ = Describe("Formatter", func() {
 	})
 	Context("When using different report formats", func() {
 		grules := []string{
-			"G101", "G102", "G103", "G104", "G106",
-			"G107", "G109", "G110", "G201", "G202", "G203", "G204",
-			"G301", "G302", "G303", "G304", "G305", "G401", "G402",
-			"G403", "G404", "G501", "G502", "G503", "G504", "G505",
+			"G101", "G102", "G103", "G104", "G106", "G107", "G109",
+			"G110", "G111", "G201", "G202", "G203", "G204", "G301",
+			"G302", "G303", "G304", "G305", "G401", "G402", "G403",
+			"G404", "G501", "G502", "G503", "G504", "G505",
 		}
 
 		It("csv formatted report should contain the CWE mapping", func() {
@@ -484,6 +484,55 @@ var _ = Describe("Formatter", func() {
 
 				Expect(result).To(ContainSubstring(expectedCweID))
 			}
+		})
+	})
+
+	Context("When converting suppressed issues", func() {
+		ruleID := "G101"
+		cwe := gosec.GetCweByRule(ruleID)
+		suppressions := []gosec.SuppressionInfo{
+			{
+				Kind:          "kind",
+				Justification: "justification",
+			},
+		}
+		suppressedIssue := createIssue(ruleID, cwe)
+		suppressedIssue.WithSuppressions(suppressions)
+
+		It("text formatted report should contain the suppressed issues", func() {
+			error := map[string][]gosec.Error{}
+			reportInfo := gosec.NewReportInfo([]*gosec.Issue{&suppressedIssue}, &gosec.Metrics{}, error)
+
+			buf := new(bytes.Buffer)
+			err := CreateReport(buf, "text", false, []string{}, reportInfo)
+			Expect(err).ShouldNot(HaveOccurred())
+
+			result := stripString(buf.String())
+			Expect(result).To(ContainSubstring("Results:Summary"))
+		})
+
+		It("sarif formatted report should contain the suppressed issues", func() {
+			error := map[string][]gosec.Error{}
+			reportInfo := gosec.NewReportInfo([]*gosec.Issue{&suppressedIssue}, &gosec.Metrics{}, error)
+
+			buf := new(bytes.Buffer)
+			err := CreateReport(buf, "sarif", false, []string{}, reportInfo)
+			Expect(err).ShouldNot(HaveOccurred())
+
+			result := stripString(buf.String())
+			Expect(result).To(ContainSubstring(`"results":[{`))
+		})
+
+		It("json formatted report should contain the suppressed issues", func() {
+			error := map[string][]gosec.Error{}
+			reportInfo := gosec.NewReportInfo([]*gosec.Issue{&suppressedIssue}, &gosec.Metrics{}, error)
+
+			buf := new(bytes.Buffer)
+			err := CreateReport(buf, "json", false, []string{}, reportInfo)
+			Expect(err).ShouldNot(HaveOccurred())
+
+			result := stripString(buf.String())
+			Expect(result).To(ContainSubstring(`"Issues":[{`))
 		})
 	})
 })

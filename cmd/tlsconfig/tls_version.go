@@ -1,6 +1,3 @@
-// +build go1.14 !go1.11
-
-// main
 package main
 
 import (
