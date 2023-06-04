@@ -517,7 +517,7 @@ func main() {
 	b := createBuffer()
 	b.WriteString("*bytes.Buffer")
 }`}, 0, gosec.NewConfig()},
-	} // it shoudn't return any errors because all method calls are whitelisted by default
+	} // it shouldn't return any errors because all method calls are whitelisted by default
 
 	// SampleCodeG104Audit finds errors that aren't being handled in audit mode
 	SampleCodeG104Audit = []CodeSample{
@@ -1931,7 +1931,7 @@ import (
 )
 
 func main() {
-	err := exec.CommandContext(context.Background(), "git", "rev-parse", "--show-toplavel").Run()
+	err := exec.CommandContext(context.Background(), "git", "rev-parse", "--show-toplevel").Run()
  	if err != nil {
 		log.Fatal(err)
 	}
@@ -1980,7 +1980,7 @@ func main() {
 }`}, 1, gosec.NewConfig()},
 		{[]string{`
 // gosec doesn't have enough context to decide that the
-// command argument of the RunCmd function is harcoded string
+// command argument of the RunCmd function is hardcoded string
 // and that's why it's better to warn the user so he can audit it
 package main
 
@@ -2032,7 +2032,7 @@ func main() {
 	RunCmd("ll", "ls")
 }`}, 0, gosec.NewConfig()},
 		{[]string{`
-// syscall.Exec function called with harcoded arguments
+// syscall.Exec function called with hardcoded arguments
 // shouldn't be consider as a command injection
 package main
 
@@ -2090,7 +2090,7 @@ func main() {
 		{[]string{`
 // starting a process with a variable as an argument
 // even if not constant is not considered as dangerous
-// because it has harcoded value
+// because it has hardcoded value
 package main
 
 import (
@@ -3444,6 +3444,70 @@ func main() {
         fmt.Println(sampleString)
     }
 }`}, 0, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+type sampleStruct struct {
+	name string
+}
+
+func main() {
+	samples := []sampleStruct{
+		{name: "a"},
+		{name: "b"},
+	}
+	for _, sample := range samples {
+		fmt.Println(sample.name)
+	}
+}`}, 0, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+type sampleStruct struct {
+	name string
+}
+
+func main() {
+	samples := []sampleStruct{
+		{name: "a"},
+		{name: "b"},
+	}
+	for _, sample := range samples {
+		fmt.Println(&sample.name)
+	}
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+type subStruct struct {
+	name string
+}
+
+type sampleStruct struct {
+	sub subStruct
+}
+
+func main() {
+	samples := []sampleStruct{
+		{sub: subStruct{name: "a"}},
+		{sub: subStruct{name: "b"}},
+	}
+	for _, sample := range samples {
+		fmt.Println(&sample.sub.name)
+	}
+}`}, 1, gosec.NewConfig()},
 	}
 
 	// SampleCodeBuildTag - G601 build tags
