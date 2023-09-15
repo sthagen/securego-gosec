@@ -10,7 +10,7 @@ jobs:
   test:
     strategy:
       matrix:
-        version: [{go: '1.19.12', golangci: 'v1.52.0'}, {go: '1.20.7', golangci: 'latest'}, {go: '1.21.0', golangci: 'latest'}]
+        version: [{go: '1.20.8', golangci: 'latest'}, {go: '1.21.1', golangci: 'latest'}]
     runs-on: ubuntu-latest
     env:
       GO111MODULE: on
@@ -20,7 +20,7 @@ jobs:
         with:
           go-version: ${{ matrix.version.go }}
       - name: Checkout Source 
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - uses: actions/cache@v3
         with:
           path: ~/go/pkg/mod
@@ -46,9 +46,9 @@ jobs:
       - name: Setup go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21.0'
+          go-version: '1.21.1'
       - name: Checkout Source 
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - uses: actions/cache@v3
         with:
           path: ~/go/pkg/mod

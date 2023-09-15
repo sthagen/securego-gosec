@@ -273,45 +273,8 @@ package main
 import "fmt"
 
 func main() {
-	username := "admin"
-	key := "472bb6c8c1871887cc117742ead362d688707d0442de930f7588db9d5ba091cc"
-	fmt.Println("Logging in with: ", username, key)
-}`}, 1, gosec.NewConfig()},
-		{[]string{`
-package main
-
-import "fmt"
-
-const (
-	b = "Bearer: c0df7a0f9b4a6a336029689b5df0712459a4f396c609ab05fd21a9097b4264f7"
-)
-
-func main() {
-	fmt.Println(b)
-}`}, 1, gosec.NewConfig()},
-		{[]string{`
-package main
-
-import "fmt"
-
-const (
-	tooLongConst = "key: c0df7a0f9b4a6a336029689b5df0712459a4f396c609ab05fd21a9097b4264f71294129"
-)
-
-func main() {
-	fmt.Println(tooLongConst)
-}`}, 0, gosec.NewConfig()},
-		{[]string{`
-package main
-
-import "fmt"
-
-const (
-	tooShortConst = "key: c0df7a0f9b4a6a336029689b5df0712459a4f396c609ab05fd21a9097b4264f71294"
-)
-
-func main() {
-	fmt.Println(tooShortConst)
+  customerNameEnvKey := "FOO_CUSTOMER_NAME"
+  fmt.Println(customerNameEnvKey)
 }`}, 0, gosec.NewConfig()},
 		{[]string{`
 package main
@@ -319,10 +282,17 @@ package main
 import "fmt"
 
 func main() {
-	compareStr := "test"
-	if compareStr == "b7997caa846af0c50c095d63d212be2fbaffd35c22c735a905ddba87d85618fd" {
-		fmt.Println(compareStr)
-	}
+  txnID := "3637cfcc1eec55a50f78a7c435914583ccbc75a21dec9a0e94dfa077647146d7"
+  fmt.Println(txnID)
+}`}, 0, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	urlSecret := "https://username:abcdef0123456789abcdef0123456789abcdef01@contoso.com/"
+  fmt.Println(urlSecret)
 }`}, 1, gosec.NewConfig()},
 		{[]string{`
 package main
@@ -330,22 +300,18 @@ package main
 import "fmt"
 
 func main() {
-	compareTooShort := "test"
-	if compareTooShort == "b7997caa846af0c50c095d63d212be2fbaffd35c22c735a905ddba87d85618d" {
-		fmt.Println(compareTooShort)
-	}
-}`}, 0, gosec.NewConfig()},
+	githubToken := "ghp_iR54dhCYg9Tfmoywi9xLmmKZrrnAw438BYh3"
+  fmt.Println(githubToken)
+}`}, 1, gosec.NewConfig()},
 		{[]string{`
 package main
 
 import "fmt"
 
 func main() {
-	compareTooLong := "test"
-	if compareTooLong == "b7997caa846af0c50c095d63d212be2fbaffd35c22c735a905ddba87d85618fd11" {
-		fmt.Println(compareTooLong)
-	}
-}`}, 0, gosec.NewConfig()},
+	awsAccessKeyID := "AKIAI44QH8DHBEXAMPLE"
+  fmt.Println(awsAccessKeyID)
+}`}, 1, gosec.NewConfig()},
 		{[]string{`
 package main
 
@@ -356,28 +322,6 @@ func main() {
 	if compareGoogleAPI == "AIzajtGS_aJGkoiAmSbXzu9I-1eytAi9Lrlh-vT" {
 		fmt.Println(compareGoogleAPI)
 	}
-}`}, 1, gosec.NewConfig()},
-		{[]string{`
-package main
-
-import "fmt"
-
-const (
-	githubPAT = "key: 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"
-)
-
-func main() {
-	fmt.Println(githubPAT)
-}`}, 1, gosec.NewConfig()},
-		{[]string{`
-package main
-
-import "fmt"
-
-func main() {
-	username := "admin"
-	googOAuthSec := "uibYYslvAUKn2ORRJ7EaZtMs"
-	fmt.Println("Logging in with: ", username, googOAuthSec)
 }`}, 1, gosec.NewConfig()},
 	}
 
@@ -1178,7 +1122,7 @@ func HelloServer(w http.ResponseWriter, r *http.Request) {
 			"fmt"
 			"net/http"
 		)
-		
+
 		func main() {
 			http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
@@ -1199,7 +1143,7 @@ func HelloServer(w http.ResponseWriter, r *http.Request) {
 			"time"
 			"net/http"
 		)
-		
+
 		func main() {
 			http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
@@ -1222,7 +1166,7 @@ func HelloServer(w http.ResponseWriter, r *http.Request) {
 			"time"
 			"net/http"
 		)
-		
+
 		func main() {
 			http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
@@ -3624,6 +3568,46 @@ type sampleStruct struct {
 }
 
 func main() {
+	samples := []*sampleStruct{
+		{name: "a"},
+		{name: "b"},
+	}
+	for _, sample := range samples {
+		fmt.Println(&sample)
+	}
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+type sampleStruct struct {
+	name string
+}
+
+func main() {
+	samples := []*sampleStruct{
+		{name: "a"},
+		{name: "b"},
+	}
+	for _, sample := range samples {
+		fmt.Println(&sample.name)
+	}
+}`}, 0, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+type sampleStruct struct {
+	name string
+}
+
+func main() {
 	samples := []sampleStruct{
 		{name: "a"},
 		{name: "b"},
@@ -3654,6 +3638,44 @@ func main() {
 	}
 	for _, sample := range samples {
 		fmt.Println(&sample.sub.name)
+	}
+}`}, 1, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+type subStruct struct {
+	name string
+}
+
+type sampleStruct struct {
+	sub subStruct
+}
+
+func main() {
+	samples := []*sampleStruct{
+		{sub: subStruct{name: "a"}},
+		{sub: subStruct{name: "b"}},
+	}
+	for _, sample := range samples {
+		fmt.Println(&sample.sub.name)
+	}
+}`}, 0, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	one, two := 1, 2
+	samples := []*int{&one, &two}
+	for _, sample := range samples {
+		fmt.Println(&sample)
 	}
 }`}, 1, gosec.NewConfig()},
 	}
@@ -3888,5 +3910,19 @@ func doStuff(x []int) {
 	newSlice2 := x[:6]
 	fmt.Println(newSlice2)
 }`}, 2, gosec.NewConfig()},
+		{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+  testMap := make(map[string]any, 0)
+  testMap["test1"] = map[string]interface{}{
+    "test2": map[string]interface{}{
+      "value": 0,
+    },
+  }
+  fmt.Println(testMap)
+}`}, 0, gosec.NewConfig()},
 	}
 )
