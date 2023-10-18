@@ -306,21 +306,21 @@ var _ = Describe("Analyzer", func() {
 			Expect(nosecIssues).Should(HaveLen(sample.Errors))
 		})
 
-		XIt("should be possible to overwrite nosec comments, and report issues but the should not be counted", func() {
+		It("should be possible to overwrite nosec comments, and report issues but they should not be counted", func() {
 			// Rule for MD5 weak crypto usage
 			sample := testutils.SampleCodeG401[0]
 			source := sample.Code[0]
 
 			// overwrite nosec option
 			nosecIgnoreConfig := gosec.NewConfig()
-			nosecIgnoreConfig.SetGlobal(gosec.Nosec, "true")
+			nosecIgnoreConfig.SetGlobal(gosec.Nosec, "mynosec")
 			nosecIgnoreConfig.SetGlobal(gosec.ShowIgnored, "true")
 			customAnalyzer := gosec.NewAnalyzer(nosecIgnoreConfig, tests, false, false, 1, logger)
 			customAnalyzer.LoadRules(rules.Generate(false, rules.NewRuleFilter(false, "G401")).RulesInfo())
 
 			nosecPackage := testutils.NewTestPackage()
 			defer nosecPackage.Close()
-			nosecSource := strings.Replace(source, "h := md5.New()", "h := md5.New() //#nosec", 1)
+			nosecSource := strings.Replace(source, "h := md5.New()", "h := md5.New() // #mynosec", 1)
 			nosecPackage.AddFile("md5.go", nosecSource)
 			err := nosecPackage.Build()
 			Expect(err).ShouldNot(HaveOccurred())
@@ -797,6 +797,58 @@ var _ = Describe("Analyzer", func() {
 			issues, _, _ := analyzer.Report()
 			Expect(issues).Should(HaveLen(sample.Errors))
 			Expect(issues[0].Suppressions).To(HaveLen(2))
+		})
+
+		It("should not report an error if the violation is suppressed on a struct filed", func() {
+			sample := testutils.SampleCodeG402[0]
+			source := sample.Code[0]
+			analyzer.LoadRules(rules.Generate(false, rules.NewRuleFilter(false, "G402")).RulesInfo())
+
+			nosecPackage := testutils.NewTestPackage()
+			defer nosecPackage.Close()
+			nosecSource := strings.Replace(source,
+				"TLSClientConfig: &tls.Config{InsecureSkipVerify: true}",
+				"TLSClientConfig: &tls.Config{InsecureSkipVerify: true} // #nosec G402", 1)
+			nosecPackage.AddFile("tls.go", nosecSource)
+			err := nosecPackage.Build()
+			Expect(err).ShouldNot(HaveOccurred())
+			err = analyzer.Process(buildTags, nosecPackage.Path)
+			Expect(err).ShouldNot(HaveOccurred())
+			issues, _, _ := analyzer.Report()
+			Expect(issues).To(HaveLen(sample.Errors))
+			Expect(issues[0].Suppressions).To(HaveLen(1))
+			Expect(issues[0].Suppressions[0].Kind).To(Equal("inSource"))
+		})
+
+		It("should not report an error if the violation is suppressed on multi-lien issue", func() {
+			source := `
+package main
+
+import (
+	"fmt"
+)
+
+const TokenLabel = `
+			source += "`" + `
+f62e5bcda4fae4f82370da0c6f20697b8f8447ef
+      ` + "`" + "//#nosec G101 -- false positive, this is not a private data" + `
+func main() {
+	fmt.Printf("Label: %s ", TokenLabel)
+}
+      `
+			analyzer.LoadRules(rules.Generate(false, rules.NewRuleFilter(false, "G101")).RulesInfo())
+			nosecPackage := testutils.NewTestPackage()
+			defer nosecPackage.Close()
+			nosecPackage.AddFile("pwd.go", source)
+			err := nosecPackage.Build()
+			Expect(err).ShouldNot(HaveOccurred())
+			err = analyzer.Process(buildTags, nosecPackage.Path)
+			Expect(err).ShouldNot(HaveOccurred())
+			issues, _, _ := analyzer.Report()
+			Expect(issues).To(HaveLen(1))
+			Expect(issues[0].Suppressions).To(HaveLen(1))
+			Expect(issues[0].Suppressions[0].Kind).To(Equal("inSource"))
+			Expect(issues[0].Suppressions[0].Justification).To(Equal("false positive, this is not a private data"))
 		})
 	})
 })
