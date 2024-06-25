@@ -1,5 +1,3 @@
-// (c) Copyright 2016 Hewlett Packard Enterprise Development LP
-//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,16 +19,16 @@ import (
 	"github.com/securego/gosec/v2/issue"
 )
 
-type usesWeakCryptographyEncryption struct {
+type usesWeakCryptographyHash struct {
 	issue.MetaData
 	blocklist map[string][]string
 }
 
-func (r *usesWeakCryptographyEncryption) ID() string {
+func (r *usesWeakCryptographyHash) ID() string {
 	return r.MetaData.ID
 }
 
-func (r *usesWeakCryptographyEncryption) Match(n ast.Node, c *gosec.Context) (*issue.Issue, error) {
+func (r *usesWeakCryptographyHash) Match(n ast.Node, c *gosec.Context) (*issue.Issue, error) {
 	for pkg, funcs := range r.blocklist {
 		if _, matched := gosec.MatchCallByPackage(n, c, pkg, funcs...); matched {
 			return c.NewIssue(n, r.ID(), r.What, r.Severity, r.Confidence), nil
@@ -39,12 +37,12 @@ func (r *usesWeakCryptographyEncryption) Match(n ast.Node, c *gosec.Context) (*i
 	return nil, nil
 }
 
-// NewUsesWeakCryptographyEncryption detects uses of des.*, rc4.*
-func NewUsesWeakCryptographyEncryption(id string, _ gosec.Config) (gosec.Rule, []ast.Node) {
+// NewUsesWeakCryptographyHash detects uses of md5.*, sha1.*
+func NewUsesWeakCryptographyHash(id string, _ gosec.Config) (gosec.Rule, []ast.Node) {
 	calls := make(map[string][]string)
-	calls["crypto/des"] = []string{"NewCipher", "NewTripleDESCipher"}
-	calls["crypto/rc4"] = []string{"NewCipher"}
-	rule := &usesWeakCryptographyEncryption{
+	calls["crypto/md5"] = []string{"New", "Sum"}
+	calls["crypto/sha1"] = []string{"New", "Sum"}
+	rule := &usesWeakCryptographyHash{
 		blocklist: calls,
 		MetaData: issue.MetaData{
 			ID:         id,

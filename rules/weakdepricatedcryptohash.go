@@ -1,4 +1,4 @@
-// (c) Copyright 2016 Hewlett Packard Enterprise Development LP
+// (c) Copyright 2024 Mercedes-Benz Tech Innovation GmbH
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,16 +21,16 @@ import (
 	"github.com/securego/gosec/v2/issue"
 )
 
-type usesWeakCryptographyEncryption struct {
+type usesWeakDeprecatedCryptographyHash struct {
 	issue.MetaData
 	blocklist map[string][]string
 }
 
-func (r *usesWeakCryptographyEncryption) ID() string {
+func (r *usesWeakDeprecatedCryptographyHash) ID() string {
 	return r.MetaData.ID
 }
 
-func (r *usesWeakCryptographyEncryption) Match(n ast.Node, c *gosec.Context) (*issue.Issue, error) {
+func (r *usesWeakDeprecatedCryptographyHash) Match(n ast.Node, c *gosec.Context) (*issue.Issue, error) {
 	for pkg, funcs := range r.blocklist {
 		if _, matched := gosec.MatchCallByPackage(n, c, pkg, funcs...); matched {
 			return c.NewIssue(n, r.ID(), r.What, r.Severity, r.Confidence), nil
@@ -39,18 +39,18 @@ func (r *usesWeakCryptographyEncryption) Match(n ast.Node, c *gosec.Context) (*i
 	return nil, nil
 }
 
-// NewUsesWeakCryptographyEncryption detects uses of des.*, rc4.*
-func NewUsesWeakCryptographyEncryption(id string, _ gosec.Config) (gosec.Rule, []ast.Node) {
+// NewUsesWeakCryptographyHash detects uses of md4.New, ripemd160.New
+func NewUsesWeakDeprecatedCryptographyHash(id string, _ gosec.Config) (gosec.Rule, []ast.Node) {
 	calls := make(map[string][]string)
-	calls["crypto/des"] = []string{"NewCipher", "NewTripleDESCipher"}
-	calls["crypto/rc4"] = []string{"NewCipher"}
-	rule := &usesWeakCryptographyEncryption{
+	calls["golang.org/x/crypto/md4"] = []string{"New"}
+	calls["golang.org/x/crypto/ripemd160"] = []string{"New"}
+	rule := &usesWeakDeprecatedCryptographyHash{
 		blocklist: calls,
 		MetaData: issue.MetaData{
 			ID:         id,
 			Severity:   issue.Medium,
 			Confidence: issue.High,
-			What:       "Use of weak cryptographic primitive",
+			What:       "Use of deprecated weak cryptographic primitive",
 		},
 	}
 	return rule, []ast.Node{(*ast.CallExpr)(nil)}
