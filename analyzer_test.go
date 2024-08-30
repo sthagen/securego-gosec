@@ -1503,6 +1503,44 @@ var _ = Describe("Analyzer", func() {
 		})
 
 		It("should not report an error if the analyzer is not included", func() {
+			sample := testutils.SampleCodeG407[0]
+			source := sample.Code[0]
+			analyzer.LoadAnalyzers(analyzers.Generate(true, analyzers.NewAnalyzerFilter(false, "G115")).AnalyzersInfo())
+
+			controlPackage := testutils.NewTestPackage()
+			defer controlPackage.Close()
+			controlPackage.AddFile("cipher.go", source)
+			err := controlPackage.Build()
+			Expect(err).ShouldNot(HaveOccurred())
+			err = analyzer.Process(buildTags, controlPackage.Path)
+			Expect(err).ShouldNot(HaveOccurred())
+			controlIssues, _, _ := analyzer.Report()
+			Expect(controlIssues).Should(HaveLen(sample.Errors))
+			Expect(controlIssues[0].Suppressions).To(HaveLen(1))
+			Expect(controlIssues[0].Suppressions[0].Kind).To(Equal("external"))
+			Expect(controlIssues[0].Suppressions[0].Justification).To(Equal("Globally suppressed."))
+		})
+
+		It("should not report an error if the analyzer is excluded", func() {
+			sample := testutils.SampleCodeG407[0]
+			source := sample.Code[0]
+			analyzer.LoadAnalyzers(analyzers.Generate(true, analyzers.NewAnalyzerFilter(true, "G407")).AnalyzersInfo())
+
+			controlPackage := testutils.NewTestPackage()
+			defer controlPackage.Close()
+			controlPackage.AddFile("cipher.go", source)
+			err := controlPackage.Build()
+			Expect(err).ShouldNot(HaveOccurred())
+			err = analyzer.Process(buildTags, controlPackage.Path)
+			Expect(err).ShouldNot(HaveOccurred())
+			issues, _, _ := analyzer.Report()
+			Expect(issues).Should(HaveLen(sample.Errors))
+			Expect(issues[0].Suppressions).To(HaveLen(1))
+			Expect(issues[0].Suppressions[0].Kind).To(Equal("external"))
+			Expect(issues[0].Suppressions[0].Justification).To(Equal("Globally suppressed."))
+		})
+
+		It("should not report an error if the analyzer is not included", func() {
 			sample := testutils.SampleCodeG602[0]
 			source := sample.Code[0]
 			analyzer.LoadAnalyzers(analyzers.Generate(true, analyzers.NewAnalyzerFilter(false, "G115")).AnalyzersInfo())
