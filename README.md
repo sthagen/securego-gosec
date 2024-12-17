@@ -308,7 +308,7 @@ func main() {
 	}
 
 	client := &http.Client{Transport: tr}
-	_, err := client.Get("https://golang.org/")
+	_, err := client.Get("https://go.dev/")
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -355,7 +355,7 @@ comment.
 
 ### Build tags
 
-gosec is able to pass your [Go build tags](https://golang.org/pkg/go/build/) to the analyzer.
+gosec is able to pass your [Go build tags](https://pkg.go.dev/go/build/) to the analyzer.
 They can be provided as a comma separated list as follows:
 
 ```bash
@@ -386,6 +386,8 @@ $ gosec -fmt=json -out=results.json -stdout -verbose=text *.go
 **Note:** gosec generates the [generic issue import format](https://docs.sonarqube.org/latest/analysis/generic-issue/) for SonarQube, and a report has to be imported into SonarQube using `sonar.externalIssuesReportPaths=path/to/gosec-report.json`.
 
 ## Development
+
+[CONTRIBUTING.md](https://github.com/securego/gosec/blob/master/CONTRIBUTING.md) contains detailed information about adding new rules to gosec.
 
 ### Build
 
