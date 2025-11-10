@@ -1,7 +1,7 @@
 module github.com/securego/gosec/v2
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.16.0
+	github.com/anthropics/anthropic-sdk-go v1.17.0
 	github.com/ccojocar/zxcvbn-go v1.0.4
 	github.com/google/uuid v1.6.0
 	github.com/gookit/color v1.6.0
@@ -9,11 +9,12 @@ require (
 	github.com/mozilla/tls-observatory v0.0.0-20250923143331-eef96233227e
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.43.0
 	golang.org/x/text v0.30.0
 	golang.org/x/tools v0.38.0
-	google.golang.org/genai v1.33.0
+	google.golang.org/genai v1.34.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
