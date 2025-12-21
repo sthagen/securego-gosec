@@ -159,6 +159,12 @@ var (
 	// key to implementing AI provider services
 	flagAiAPIKey = flag.String("ai-api-key", "", "Key to access the AI API")
 
+	// base URL for AI API (optional, for OpenAI-compatible APIs)
+	flagAiBaseURL = flag.String("ai-base-url", "", "Base URL for AI API (e.g., for OpenAI-compatible services)")
+
+	// skip SSL verification for AI API
+	flagAiSkipSSL = flag.Bool("ai-skip-ssl", false, "Skip SSL certificate verification for AI API")
+
 	// exclude the folders from scan
 	flagDirsExclude arrayFlags
 
@@ -294,11 +300,7 @@ func getPrintedFormat(format string, verbose string) string {
 }
 
 func printReport(format string, color bool, rootPaths []string, reportInfo *gosec.ReportInfo) error {
-	err := report.CreateReport(os.Stdout, format, color, rootPaths, reportInfo)
-	if err != nil {
-		return err
-	}
-	return nil
+	return report.CreateReport(os.Stdout, format, color, rootPaths, reportInfo)
 }
 
 func saveReport(filename, format string, rootPaths []string, reportInfo *gosec.ReportInfo) error {
@@ -307,11 +309,7 @@ func saveReport(filename, format string, rootPaths []string, reportInfo *gosec.R
 		return err
 	}
 	defer outfile.Close() // #nosec G307
-	err = report.CreateReport(outfile, format, false, rootPaths, reportInfo)
-	if err != nil {
-		return err
-	}
-	return nil
+	return report.CreateReport(outfile, format, false, rootPaths, reportInfo)
 }
 
 func convertToScore(value string) (issue.Score, error) {
@@ -509,7 +507,7 @@ func main() {
 	aiEnabled := *flagAiAPIProvider != ""
 
 	if len(issues) > 0 && aiEnabled {
-		err := autofix.GenerateSolution(*flagAiAPIProvider, aiAPIKey, issues)
+		err := autofix.GenerateSolution(*flagAiAPIProvider, aiAPIKey, *flagAiBaseURL, *flagAiSkipSSL, issues)
 		if err != nil {
 			logger.Print(err)
 		}
