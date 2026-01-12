@@ -15,11 +15,10 @@
 package analyzers
 
 import (
-	"cmp"
 	"fmt"
 	"go/token"
 	"math"
-	"regexp"
+	"math/bits"
 	"strconv"
 	"strings"
 
@@ -30,30 +29,23 @@ import (
 	"github.com/securego/gosec/v2/issue"
 )
 
-type integer struct {
-	signed bool
-	size   int
-	min    int
-	max    uint
-}
-
 type rangeResult struct {
-	minValue             int
-	maxValue             uint
+	minValue             uint64
+	maxValue             uint64
+	minValueSet          bool
+	maxValueSet          bool
 	explicitPositiveVals []uint
 	explicitNegativeVals []int
 	isRangeCheck         bool
-	convertFound         bool
 }
 
-type branchResults struct {
-	minValue             *int
-	maxValue             *uint
-	explicitPositiveVals []uint
-	explicitNegativeVals []int
-	convertFound         bool
-}
+const (
+	minInt64  = int64(math.MinInt64)
+	maxUint64 = uint64(math.MaxUint64)
+	maxInt64  = uint64(math.MaxInt64)
+)
 
+// newConversionOverflowAnalyzer creates a new analysis.Analyzer for detecting integer overflows in conversions.
 func newConversionOverflowAnalyzer(id string, description string) *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name:     id,
@@ -63,12 +55,31 @@ func newConversionOverflowAnalyzer(id string, description string) *analysis.Anal
 	}
 }
 
-func runConversionOverflow(pass *analysis.Pass) (interface{}, error) {
+type overflowState struct {
+	pass       *analysis.Pass
+	rangeCache map[rangeCacheKey]rangeResult
+}
+
+type rangeCacheKey struct {
+	block *ssa.BasicBlock
+	val   ssa.Value
+}
+
+func newOverflowState(pass *analysis.Pass) *overflowState {
+	return &overflowState{
+		pass:       pass,
+		rangeCache: make(map[rangeCacheKey]rangeResult),
+	}
+}
+
+// runConversionOverflow analyzes the SSA representation of the code to find potential integer overflows in type conversions.
+func runConversionOverflow(pass *analysis.Pass) (any, error) {
 	ssaResult, err := getSSAResult(pass)
 	if err != nil {
 		return nil, fmt.Errorf("building ssa representation: %w", err)
 	}
 
+	state := newOverflowState(pass)
 	issues := []*issue.Issue{}
 	for _, mcall := range ssaResult.SSA.SrcFuncs {
 		for _, block := range mcall.DomPreorder() {
@@ -78,9 +89,10 @@ func runConversionOverflow(pass *analysis.Pass) (interface{}, error) {
 					src := instr.X.Type().Underlying().String()
 					dst := instr.Type().Underlying().String()
 					if isIntOverflow(src, dst) {
-						if isSafeConversion(instr) {
+						if state.isSafeConversion(instr) {
 							continue
 						}
+
 						issue := newIssue(pass.Analyzer.Name,
 							fmt.Sprintf("integer overflow conversion %s -> %s", src, dst),
 							pass.Fset,
@@ -101,74 +113,29 @@ func runConversionOverflow(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
+// isIntOverflow checks if a conversion from src type to dst type can theoretically overflow (e.g., int64 -> int8).
 func isIntOverflow(src string, dst string) bool {
-	srcInt, err := parseIntType(src)
+	srcInt, err := ParseIntType(src)
 	if err != nil {
 		return false
 	}
 
-	dstInt, err := parseIntType(dst)
+	dstInt, err := ParseIntType(dst)
 	if err != nil {
 		return false
 	}
 
-	return srcInt.min < dstInt.min || srcInt.max > dstInt.max
+	return srcInt.Min < dstInt.Min || srcInt.Max > dstInt.Max
 }
 
-func parseIntType(intType string) (integer, error) {
-	re := regexp.MustCompile(`^(?P<type>u?int)(?P<size>\d{1,2})?$`)
-	matches := re.FindStringSubmatch(intType)
-	if matches == nil {
-		return integer{}, fmt.Errorf("no integer type match found for %s", intType)
-	}
-
-	it := matches[re.SubexpIndex("type")]
-	is := matches[re.SubexpIndex("size")]
-
-	signed := it == "int"
-
-	// use default system int type in case size is not present in the type.
-	intSize := strconv.IntSize
-	if is != "" {
-		var err error
-		intSize, err = strconv.Atoi(is)
-		if err != nil {
-			return integer{}, fmt.Errorf("failed to parse the integer type size: %w", err)
-		}
-	}
-
-	if intSize != 8 && intSize != 16 && intSize != 32 && intSize != 64 && is != "" {
-		return integer{}, fmt.Errorf("invalid bit size: %d", intSize)
-	}
-
-	var minVal int
-	var maxVal uint
-
-	if signed {
-		shiftAmount := intSize - 1
-
-		// Perform a bounds check.
-		if shiftAmount < 0 {
-			return integer{}, fmt.Errorf("invalid shift amount: %d", shiftAmount)
-		}
-
-		maxVal = (1 << uint(shiftAmount)) - 1
-		minVal = -1 << (intSize - 1)
-
-	} else {
-		maxVal = (1 << uint(intSize)) - 1
-		minVal = 0
-	}
-
-	return integer{
-		signed: signed,
-		size:   intSize,
-		min:    minVal,
-		max:    maxVal,
-	}, nil
+type operationInfo struct {
+	op      string
+	extra   ssa.Value
+	flipped bool
 }
 
-func isSafeConversion(instr *ssa.Convert) bool {
+// isSafeConversion checks if a specific conversion instruction is safe from overflow, considering logic and constraints.
+func (s *overflowState) isSafeConversion(instr *ssa.Convert) bool {
 	dstType := instr.Type().Underlying().String()
 
 	// Check for constant conversions.
@@ -178,382 +145,1356 @@ func isSafeConversion(instr *ssa.Convert) bool {
 		}
 	}
 
-	// Check for string to integer conversions with specified bit size.
-	if isStringToIntConversion(instr, dstType) {
-		return true
-	}
-
 	// Check for explicit range checks.
-	if hasExplicitRangeCheck(instr, dstType) {
+	if s.hasRangeCheck(instr.X, dstType, instr.Block()) {
 		return true
 	}
 
 	return false
 }
 
+// hasRangeCheck determines if there is a valid range check for the given value that ensures safety.
+func (s *overflowState) hasRangeCheck(v ssa.Value, dstType string, block *ssa.BasicBlock) bool {
+	dstInt, err := ParseIntType(dstType)
+	if err != nil {
+		return false
+	}
+
+	isSrcUnsigned := strings.HasPrefix(v.Type().Underlying().String(), "uint")
+
+	res := s.resolveRange(v, block, make(map[ssa.Value]bool))
+	minValue, minValueSet, maxValue, maxValueSet, isRangeCheck := res.minValue, res.minValueSet, res.maxValue, res.maxValueSet, res.isRangeCheck
+	explicitPositiveVals, explicitNegativeVals := res.explicitPositiveVals, res.explicitNegativeVals
+	if explicitValsInRange(explicitPositiveVals, explicitNegativeVals, dstInt) {
+		return true
+	}
+
+	// Check all predecessors for OR support.
+	if len(block.Preds) > 1 {
+		allPredsSafe := true
+		for _, pred := range block.Preds {
+			if !s.isSafeFromPredecessor(v, dstType, pred, block) {
+				allPredsSafe = false
+				break
+			}
+		}
+		if allPredsSafe {
+			return true
+		}
+	}
+
+	if explicitValsInRange(res.explicitPositiveVals, res.explicitNegativeVals, dstInt) {
+		return true
+	}
+
+	// Relax requirement: If we have a definitive range (both set) and it's safe,
+	// we allow it even if not explicitly "checked" by an IF,
+	// because definition-based ranges (like constants or arithmetic on constants) are certain.
+	isDefinitiveSafe := minValueSet && maxValueSet
+
+	if !isRangeCheck && !isDefinitiveSafe {
+		return false
+	}
+
+	// Check for impossible ranges (disjoint)
+	if !isSrcUnsigned {
+		if minValueSet && maxValueSet && toInt64(minValue) > toInt64(maxValue) {
+			return true
+		}
+	}
+	if isSrcUnsigned && minValueSet && maxValueSet && minValue > maxValue {
+		return true
+	}
+
+	if dstInt.Signed {
+		if isSrcUnsigned {
+			return maxValueSet && maxValue <= uint64(dstInt.Max)
+		}
+		return (minValueSet && toInt64(minValue) >= int64(dstInt.Min)) && (maxValueSet && toInt64(maxValue) <= toInt64(uint64(dstInt.Max)))
+	}
+	if isSrcUnsigned {
+		return maxValueSet && maxValue <= uint64(dstInt.Max)
+	}
+	return (minValueSet && toInt64(minValue) >= 0) && (maxValueSet && maxValue <= uint64(dstInt.Max))
+}
+
+// minBounds computes the minimum of two uint64 values, treating them as signed if !isSrcUnsigned.
+func minBounds(a, b uint64, isSrcUnsigned bool) uint64 {
+	if !isSrcUnsigned {
+		if toInt64(a) < toInt64(b) {
+			return a
+		}
+		return b
+	}
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// updateRangeMinMax updates the min or max value of the result range if the new value is tighter.
+func updateRangeMinMax(result *rangeResult, newVal uint64, isMin bool, isSrcUnsigned bool) {
+	if isMin {
+		if !result.minValueSet || (isSrcUnsigned && newVal > result.minValue) || (!isSrcUnsigned && toInt64(newVal) > toInt64(result.minValue)) {
+			result.minValue = newVal
+			result.minValueSet = true
+			result.isRangeCheck = true
+		}
+	} else {
+		if !result.maxValueSet || (isSrcUnsigned && newVal < result.maxValue) || (!isSrcUnsigned && toInt64(newVal) < toInt64(result.maxValue)) {
+			result.maxValue = newVal
+			result.maxValueSet = true
+			result.isRangeCheck = true
+		}
+	}
+}
+
+// maxBounds computes the maximum of two uint64 values, treating them as signed if !isSrcUnsigned.
+func maxBounds(a, b uint64, isSrcUnsigned bool) uint64 {
+	if a == toUint64(minInt64) { // Using MinInt64 as "not set" for signed-capable minValue
+		return b
+	}
+	if b == toUint64(minInt64) {
+		return a
+	}
+	if !isSrcUnsigned {
+		if toInt64(a) > toInt64(b) {
+			return a
+		}
+		return b
+	}
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (s *overflowState) isSafeFromPredecessor(v ssa.Value, dstType string, pred *ssa.BasicBlock, targetBlock *ssa.BasicBlock) bool {
+	if vIf, ok := pred.Instrs[len(pred.Instrs)-1].(*ssa.If); ok {
+		dstInt, _ := ParseIntType(dstType)
+		isSrcUnsigned := strings.HasPrefix(v.Type().Underlying().String(), "uint")
+		for i, succ := range pred.Succs {
+			if succ == targetBlock {
+				// We took this specific edge.
+				result := s.getResultRangeForIfEdge(vIf, i == 0, v)
+				if result.isRangeCheck {
+					var safe bool
+					if dstInt.Signed {
+						if isSrcUnsigned {
+							safe = result.maxValueSet && result.maxValue <= uint64(dstInt.Max)
+						} else {
+							safe = (result.minValueSet && toInt64(result.minValue) >= int64(dstInt.Min)) && (result.maxValueSet && toInt64(result.maxValue) <= toInt64(uint64(dstInt.Max)))
+						}
+					} else {
+						if isSrcUnsigned {
+							safe = result.maxValueSet && result.maxValue <= uint64(dstInt.Max)
+						} else {
+							safe = (result.minValueSet && toInt64(result.minValue) >= 0) && (result.maxValueSet && result.maxValue <= uint64(dstInt.Max))
+						}
+					}
+					if safe {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// getResultRangeForIfEdge returns the range constraints implied by taking a specific branch (then/else) of an If instruction.
+func (s *overflowState) getResultRangeForIfEdge(vIf *ssa.If, isTrue bool, v ssa.Value) rangeResult {
+	vCond := vIf.Cond
+	res := rangeResult{
+		minValue: toUint64(minInt64),
+		maxValue: maxUint64,
+	}
+
+	if binOp, ok := vCond.(*ssa.BinOp); ok {
+		if isRangeCheck(binOp, v) {
+			res.isRangeCheck = true
+			s.updateResultFromBinOpForValue(&res, binOp, v, isTrue)
+		}
+	}
+	return res
+}
+
+// getResultRangeForValue calculates the range of a value by analyzing the dominator tree and control flow.
+func (s *overflowState) getResultRangeForValue(ifInstr *ssa.If, v ssa.Value, targetBlock *ssa.BasicBlock) rangeResult {
+	cond := ifInstr.Cond
+	binOp, ok := cond.(*ssa.BinOp)
+	if !ok || !isRangeCheck(binOp, v) {
+		return rangeResult{
+			minValue: toUint64(minInt64),
+			maxValue: maxUint64,
+		}
+	}
+
+	result := rangeResult{
+		minValue:     toUint64(minInt64),
+		maxValue:     maxUint64,
+		isRangeCheck: true,
+	}
+
+	// Determine if targetBlock is reached through then or else branch
+	thenFound := isReachable(ifInstr.Block().Succs[0], targetBlock, make(map[*ssa.BasicBlock]bool))
+	elseFound := isReachable(ifInstr.Block().Succs[1], targetBlock, make(map[*ssa.BasicBlock]bool))
+
+	if thenFound && elseFound {
+		return result
+	}
+
+	s.updateResultFromBinOpForValue(&result, binOp, v, thenFound)
+
+	return result
+}
+
+// isReachable checks if there is a path from the start block to the target block.
+func isReachable(start, target *ssa.BasicBlock, visited map[*ssa.BasicBlock]bool) bool {
+	if start == target {
+		return true
+	}
+	if visited[start] {
+		return false
+	}
+	visited[start] = true
+	for _, succ := range start.Succs {
+		if isReachable(succ, target, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+// updateResultFromBinOpForValue refines the range result based on a binary operation constraint from a conditional.
+func (s *overflowState) updateResultFromBinOpForValue(result *rangeResult, binOp *ssa.BinOp, v ssa.Value, successPathConvert bool) {
+	operandsFlipped := false
+	compareVal, op := getRealValueFromOperation(v)
+	if fieldAddr, ok := compareVal.(*ssa.FieldAddr); ok {
+		compareVal = fieldAddr
+	}
+
+	var matchSide ssa.Value
+	var inverseOp operationInfo
+	if isEquivalent(binOp.X, v) {
+		matchSide = binOp.Y
+		op = operationInfo{}
+	} else if isEquivalent(binOp.Y, v) {
+		matchSide = binOp.X
+		operandsFlipped = true
+		op = operationInfo{}
+	} else if isSameOrRelated(binOp.X, compareVal) {
+		matchSide = binOp.Y
+		// check if binOp.X has an operation relative to compareVal
+		if rVal, rOp := getRealValueFromOperation(binOp.X); rVal == compareVal {
+			inverseOp = rOp
+		}
+	} else if rVal, rOp := getRealValueFromOperation(binOp.X); rVal == compareVal {
+		matchSide = binOp.Y
+		inverseOp = rOp
+	} else if isSameOrRelated(binOp.Y, compareVal) {
+		matchSide = binOp.X
+		operandsFlipped = true
+		// check if binOp.Y has an operation relative to compareVal
+		if rVal, rOp := getRealValueFromOperation(binOp.Y); rVal == compareVal {
+			inverseOp = rOp
+		}
+	} else if rVal, rOp := getRealValueFromOperation(binOp.Y); rVal == compareVal {
+		matchSide = binOp.X
+		operandsFlipped = true
+		inverseOp = rOp
+	} else {
+		return
+	}
+
+	val, ok := GetConstantInt64(matchSide)
+
+	if !ok {
+		return
+	}
+
+	// Apply inverse operations to the limit 'val' before updating min/max
+	// e.g. if x << 2 < 100. val=100. inverseOp=<<.
+	// we want range for x. x < 100 >> 2.
+	if inverseOp.op != "" {
+		switch inverseOp.op {
+		case "<<":
+			if vShift, ok := GetConstantInt64(inverseOp.extra); ok && vShift >= 0 {
+				val = val >> uint(vShift)
+			}
+		case "+":
+			if vAdd, ok := GetConstantInt64(inverseOp.extra); ok {
+				val -= vAdd
+			}
+		case "-":
+			if vSub, ok := GetConstantInt64(inverseOp.extra); ok {
+				if inverseOp.flipped { // val = extra - x => x = extra - val
+					val = vSub - val
+					operandsFlipped = !operandsFlipped
+				} else { // val = x - extra => x = val + extra
+					val += vSub
+				}
+			}
+		case ">>":
+			if vShift, ok := GetConstantInt64(inverseOp.extra); ok && vShift >= 0 {
+				val = val << uint(vShift)
+			}
+		case "*":
+			if vMul, ok := GetConstantUint64(inverseOp.extra); ok && vMul > 0 {
+				val = toInt64(toUint64(val) / vMul)
+			}
+		case "/":
+			if vQuo, ok := GetConstantUint64(inverseOp.extra); ok && vQuo > 0 {
+				if inverseOp.flipped { // val = extra / x => x = extra / val
+					if val != 0 {
+						val = toInt64(vQuo / toUint64(val))
+					}
+					operandsFlipped = !operandsFlipped
+				} else { // val = x / extra => x = val * vQuo
+					val = toInt64(toUint64(val) * vQuo)
+				}
+			}
+		}
+	}
+
+	// Apply forward operations from 'op' to the limit 'val'
+	// e.g. if x < 30 and v is x * 10. val=30. op=*.
+	// we want range for v. v < 30 * 10.
+	if op.op != "" {
+		switch op.op {
+		case "<<":
+			if vShift, ok := GetConstantInt64(op.extra); ok && vShift >= 0 {
+				val = val << uint(vShift)
+			}
+		case "+":
+			if vAdd, ok := GetConstantInt64(op.extra); ok {
+				val += vAdd
+			}
+		case "-":
+			if vSub, ok := GetConstantInt64(op.extra); ok {
+				if op.flipped { // v = extra - x. x < val => v > extra - val
+					val = vSub - val
+					operandsFlipped = !operandsFlipped
+				} else { // v = x - extra. x < val => v < val - extra
+					val -= vSub
+				}
+			}
+		case ">>":
+			if vShift, ok := GetConstantInt64(op.extra); ok && vShift >= 0 {
+				val = val >> uint(vShift)
+			}
+		case "*":
+			isSrcUnsigned := strings.HasPrefix(v.Type().Underlying().String(), "uint")
+			if isSrcUnsigned {
+				if vMul, ok := GetConstantUint64(op.extra); ok && vMul != 0 {
+					hi, lo := bits.Mul64(toUint64(val), vMul)
+					if hi != 0 {
+						return
+					}
+					val = toInt64(lo)
+				}
+			} else {
+				if vMul, ok := GetConstantInt64(op.extra); ok && vMul != 0 {
+					if vMul > 0 {
+						if val >= 0 {
+							hi, lo := bits.Mul64(toUint64(val), uint64(vMul))
+							if hi != 0 {
+								return
+							}
+							val = toInt64(lo)
+						} else {
+							// Negative val, positive vMul
+							if val < minInt64/vMul {
+								return
+							}
+							val = val * vMul
+						}
+					} else {
+						// Negative vMul
+						val = val * vMul
+						operandsFlipped = !operandsFlipped
+					}
+				}
+			}
+		case "/":
+			if vQuo, ok := GetConstantInt64(op.extra); ok && vQuo > 0 {
+				if op.flipped { // v = extra / x. x < val => v > extra / val
+					if val != 0 {
+						val = vQuo / val
+					}
+					operandsFlipped = !operandsFlipped
+				} else { // v = x / extra. x < val => v < val / vQuo
+					val = val / vQuo
+				}
+			}
+		case "neg":
+			val = -val
+			operandsFlipped = !operandsFlipped
+		}
+	}
+
+	switch binOp.Op {
+	case token.LEQ, token.LSS:
+		updateMinMaxForLessOrEqual(result, val, binOp.Op, operandsFlipped, successPathConvert)
+	case token.GEQ, token.GTR:
+		updateMinMaxForGreaterOrEqual(result, val, binOp.Op, operandsFlipped, successPathConvert)
+	case token.EQL:
+		if successPathConvert {
+			updateExplicitValues(result, val)
+		}
+	case token.NEQ:
+		if !successPathConvert {
+			updateExplicitValues(result, val)
+		}
+	}
+
+	switch op.op {
+	case "neg":
+		oldMinSet, oldMaxSet := result.minValueSet, result.maxValueSet
+		oldMin, oldMax := result.minValue, result.maxValue
+		result.minValueSet, result.maxValueSet = false, false
+		if oldMinSet {
+			result.maxValue = toUint64(-toInt64(oldMin))
+			result.maxValueSet = true
+		}
+		if oldMaxSet {
+			result.minValue = toUint64(-toInt64(oldMax))
+			result.minValueSet = true
+		}
+	case "+":
+		if val, ok := GetConstantInt64(op.extra); ok {
+			if result.minValueSet {
+				result.minValue = toUint64(toInt64(result.minValue) + val)
+			}
+			if result.maxValueSet {
+				result.maxValue = toUint64(toInt64(result.maxValue) + val)
+			}
+		}
+	case "-":
+		if val, ok := GetConstantInt64(op.extra); ok {
+			if op.flipped {
+				oldMinSet, oldMaxSet := result.minValueSet, result.maxValueSet
+				oldMin, oldMax := result.minValue, result.maxValue
+				result.minValueSet, result.maxValueSet = false, false
+				if oldMaxSet {
+					result.minValue = toUint64(val - toInt64(oldMax))
+					result.minValueSet = true
+				}
+				if oldMinSet {
+					result.maxValue = toUint64(val - toInt64(oldMin))
+					result.maxValueSet = true
+				}
+			} else {
+				if result.minValueSet {
+					result.minValue = toUint64(toInt64(result.minValue) - val)
+				}
+				if result.maxValueSet {
+					result.maxValue = toUint64(toInt64(result.maxValue) - val)
+				}
+			}
+		}
+	case "&":
+		if val, ok := GetConstantInt64(op.extra); ok && val >= 0 {
+			result.minValue = 0
+			result.minValueSet = true
+			result.maxValue = uint64(val)
+			result.maxValueSet = true
+		}
+	case ">>":
+		if val, ok := GetConstantInt64(op.extra); ok && val >= 0 {
+			if result.maxValueSet {
+				result.maxValue >>= uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+			}
+		}
+	case "<<":
+		if val, ok := GetConstantInt64(op.extra); ok && val >= 0 {
+			if result.maxValueSet {
+				result.maxValue <<= uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+			}
+			if result.minValueSet {
+				result.minValue <<= uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+			}
+		}
+	case "%":
+		if val, ok := GetConstantInt64(op.extra); ok && val > 0 {
+			if (result.minValueSet && toInt64(result.minValue) >= 0) || isNonNegative(binOp.X) || isNonNegative(compareVal) {
+				result.minValue = 0
+				result.minValueSet = true
+				result.maxValue = uint64(val - 1) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+				result.maxValueSet = true
+			} else {
+				//-(val-1)
+				// Need to cast carefully: uint64(int64(...))
+				negVal := -(val - 1)
+				result.minValue = toUint64(negVal)
+				result.minValueSet = true
+				result.maxValue = uint64(val - 1) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+				result.maxValueSet = true
+			}
+		}
+	}
+}
+
+// computeRange calculates the range of a value based on its definition (arithmetic operations, constants).
+func (s *overflowState) computeRange(v ssa.Value, block *ssa.BasicBlock, visited map[ssa.Value]bool) rangeResult {
+	if visited[v] {
+		return rangeResult{}
+	}
+	visited[v] = true
+	defer delete(visited, v)
+
+	res := rangeResult{}
+	isSrcUnsigned := strings.HasPrefix(v.Type().Underlying().String(), "uint")
+
+	if isNonNegative(v) {
+		res.minValue = 0
+		res.minValueSet = true
+	}
+
+	// Definition-based range
+	switch v := v.(type) {
+	case *ssa.BinOp:
+		switch v.Op {
+		case token.ADD:
+			subResX := s.resolveRange(v.X, block, visited)
+			subResY := s.resolveRange(v.Y, block, visited)
+			if subResX.minValueSet && subResY.minValueSet {
+				res.minValue = toUint64(toInt64(subResX.minValue) + toInt64(subResY.minValue))
+				res.minValueSet = true
+			}
+			if subResX.maxValueSet && subResY.maxValueSet {
+				res.maxValue = toUint64(toInt64(subResX.maxValue) + toInt64(subResY.maxValue))
+				res.maxValueSet = true
+			}
+			res.isRangeCheck = subResX.isRangeCheck || subResY.isRangeCheck
+		case token.SUB:
+			subResX := s.resolveRange(v.X, block, visited)
+			if val, ok := GetConstantInt64(v.Y); ok {
+				// x - val
+				if subResX.minValueSet {
+					res.minValue = toUint64(toInt64(subResX.minValue) - val)
+					res.minValueSet = true
+				}
+				if subResX.maxValueSet {
+					res.maxValue = toUint64(toInt64(subResX.maxValue) - val)
+					res.maxValueSet = true
+				}
+				res.isRangeCheck = subResX.isRangeCheck
+			} else if val, ok := GetConstantInt64(v.X); ok {
+				// val - x
+				subResY := s.resolveRange(v.Y, block, visited)
+				if subResY.maxValueSet {
+					res.minValue = toUint64(val - toInt64(subResY.maxValue))
+					res.minValueSet = true
+					res.maxValue = toUint64(val - toInt64(subResY.minValue))
+					res.maxValueSet = true
+				}
+				res.isRangeCheck = subResY.isRangeCheck
+			}
+		case token.AND:
+			// AND decreases magnitude usually.
+			if val, ok := GetConstantUint64(v.Y); ok {
+				res.minValue = 0
+				res.minValueSet = true
+				res.maxValue = val
+				res.maxValueSet = true
+				res.isRangeCheck = true
+			} else {
+				// If Y is not a constant, we can only say it's non-negative if X is.
+				if isNonNegative(v.X) {
+					res.minValue = 0
+					res.minValueSet = true
+				}
+			}
+		case token.SHR:
+			if val, ok := GetConstantInt64(v.Y); ok && val >= 0 {
+				subResX := s.resolveRange(v.X, block, visited)
+				if isNonNegative(v.X) {
+					res.minValue = 0
+					res.minValueSet = true
+				}
+				if subResX.maxValueSet {
+					res.maxValue = subResX.maxValue >> uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					res.maxValueSet = true
+				} else if typeInt, err := ParseIntType(v.X.Type().Underlying().String()); err == nil {
+					// Fallback to type max
+					res.maxValue = uint64(typeInt.Max) >> uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					res.maxValueSet = true
+				}
+				res.isRangeCheck = subResX.isRangeCheck
+			}
+		case token.SHL:
+			if val, ok := GetConstantInt64(v.Y); ok && val >= 0 {
+				subResX := s.resolveRange(v.X, block, visited)
+				if subResX.minValueSet {
+					newMin := subResX.minValue << uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					// Check for overflow/wrap-around
+					// #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					if newMin>>uint(val) == subResX.minValue {
+						res.minValue = newMin
+						res.minValueSet = true
+					}
+				}
+				if subResX.maxValueSet {
+					newMax := subResX.maxValue << uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					// Check for overflow/wrap-around
+					// #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					if newMax>>uint(val) == subResX.maxValue {
+						res.maxValue = newMax
+						res.maxValueSet = true
+					}
+				}
+				res.isRangeCheck = subResX.isRangeCheck
+			}
+		case token.REM:
+			if val, ok := GetConstantInt64(v.Y); ok && val > 0 {
+				subResX := s.resolveRange(v.X, block, visited)
+				if (subResX.minValueSet && toInt64(subResX.minValue) >= 0) || isNonNegative(v.X) {
+					res.minValue = 0
+					res.minValueSet = true
+					res.maxValue = uint64(val - 1) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					res.maxValueSet = true
+				} else {
+					res.minValue = toUint64(-(val - 1))
+					res.minValueSet = true
+					res.maxValue = uint64(val - 1) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					res.maxValueSet = true
+				}
+				res.isRangeCheck = true
+			}
+		case token.MUL:
+			val, ok := GetConstantUint64(v.Y)
+			if !ok {
+				val, ok = GetConstantUint64(v.X)
+			}
+			if ok && val != 0 {
+				var subRes rangeResult
+				if isSameOrRelated(v.Y, v.X) {
+					// x*x handled by generic fallback
+				} else if _, isConst := v.Y.(*ssa.Const); isConst {
+					subRes = s.resolveRange(v.X, block, visited)
+				} else {
+					subRes = s.resolveRange(v.Y, block, visited)
+				}
+
+				if subRes.maxValueSet {
+					hi, _ := bits.Mul64(subRes.maxValue, val)
+					if hi != 0 {
+						return res
+					}
+				}
+
+				if subRes.minValueSet {
+					res.minValue = subRes.minValue * val
+					res.minValueSet = true
+				}
+				if subRes.maxValueSet {
+					res.maxValue = subRes.maxValue * val
+					res.maxValueSet = true
+				}
+				res.isRangeCheck = subRes.isRangeCheck
+			}
+		case token.QUO:
+			if val, ok := GetConstantUint64(v.Y); ok && val != 0 {
+				subResX := s.resolveRange(v.X, block, visited)
+				isSrcUnsigned := strings.HasPrefix(v.Type().Underlying().String(), "uint")
+				if isSrcUnsigned {
+					if subResX.minValueSet {
+						res.minValue = subResX.minValue / val
+						res.minValueSet = true
+					}
+					if subResX.maxValueSet {
+						res.maxValue = subResX.maxValue / val
+						res.maxValueSet = true
+					}
+				} else {
+					vVal := toInt64(val)
+					if vVal > 0 {
+						if subResX.minValueSet {
+							res.minValue = toUint64(toInt64(subResX.minValue) / vVal)
+							res.minValueSet = true
+						}
+						if subResX.maxValueSet {
+							res.maxValue = toUint64(toInt64(subResX.maxValue) / vVal)
+							res.maxValueSet = true
+						}
+					} else { // vVal < 0
+						if subResX.maxValueSet {
+							res.minValue = toUint64(toInt64(subResX.maxValue) / vVal)
+							res.minValueSet = true
+						}
+						if subResX.minValueSet {
+							res.maxValue = toUint64(toInt64(subResX.minValue) / vVal)
+							res.maxValueSet = true
+						}
+					}
+				}
+				res.isRangeCheck = subResX.isRangeCheck
+			}
+		}
+	case *ssa.UnOp:
+		subRes := s.resolveRange(v.X, block, visited)
+		switch v.Op {
+		case token.SUB:
+			// Negation: -x.
+			// Min = -Max. Max = -Min.
+			if subRes.maxValueSet {
+				res.minValue = toUint64(-toInt64(subRes.maxValue))
+				res.minValueSet = true
+			}
+			if subRes.minValueSet {
+				res.maxValue = toUint64(-toInt64(subRes.minValue))
+				res.maxValueSet = true
+			}
+			res.isRangeCheck = subRes.isRangeCheck
+		case token.XOR:
+			// Bitwise NOT: ^x = -x - 1.
+			// Min = ^Max. Max = ^Min.
+			if subRes.maxValueSet {
+				res.minValue = toUint64(toInt64(^subRes.maxValue))
+				res.minValueSet = true
+			}
+			if subRes.minValueSet {
+				res.maxValue = toUint64(toInt64(^subRes.minValue))
+				res.maxValueSet = true
+			}
+			res.isRangeCheck = subRes.isRangeCheck
+		}
+	case *ssa.Call:
+		if fn, ok := v.Call.Value.(*ssa.Builtin); ok {
+			switch fn.Name() {
+			case "len", "cap":
+				if len(v.Call.Args) == 1 {
+					arg := v.Call.Args[0]
+					if _, ok := arg.(*ssa.Slice); ok || arg.Type().String() == "string" {
+						// len(slice) or len(string) is non-negative
+						// Try to resolve range of the slice/string length if possible?
+						// For now, just >= 0.
+						// We can also check if the slice came from make()
+						argRes := s.resolveRange(arg, block, visited)
+						if argRes.minValueSet {
+							res.minValue = argRes.minValue
+							res.minValueSet = true
+						} else {
+							res.minValue = 0
+							res.minValueSet = true
+						}
+						if argRes.maxValueSet {
+							res.maxValue = argRes.maxValue
+							res.maxValueSet = true
+						}
+						res.isRangeCheck = true
+					}
+				}
+			case "min":
+				for i, arg := range v.Call.Args {
+					argRes := s.resolveRange(arg, block, visited)
+					if i == 0 {
+						res.minValue = argRes.minValue
+						res.maxValue = argRes.maxValue
+						res.minValueSet = argRes.minValueSet
+						res.maxValueSet = argRes.maxValueSet
+						continue
+					}
+					if argRes.minValueSet {
+						if !res.minValueSet {
+							res.minValue = argRes.minValue
+							res.minValueSet = true
+						} else {
+							res.minValue = minBounds(res.minValue, argRes.minValue, isSrcUnsigned)
+						}
+					}
+					if argRes.maxValueSet {
+						if !res.maxValueSet {
+							res.maxValue = argRes.maxValue
+							res.maxValueSet = true
+						} else {
+							res.maxValue = minBounds(res.maxValue, argRes.maxValue, isSrcUnsigned)
+						}
+					}
+				}
+				res.isRangeCheck = true
+			case "max":
+				for i, arg := range v.Call.Args {
+					argRes := s.resolveRange(arg, block, visited)
+					if i == 0 {
+						res.minValue = argRes.minValue
+						res.maxValue = argRes.maxValue
+						res.minValueSet = argRes.minValueSet
+						res.maxValueSet = argRes.maxValueSet
+						continue
+					}
+					if argRes.minValueSet {
+						if !res.minValueSet {
+							res.minValue = argRes.minValue
+							res.minValueSet = true
+						} else {
+							res.minValue = maxBounds(res.minValue, argRes.minValue, isSrcUnsigned)
+						}
+					}
+					if argRes.maxValueSet {
+						if !res.maxValueSet {
+							res.maxValue = argRes.maxValue
+							res.maxValueSet = true
+						} else {
+							res.maxValue = maxBounds(res.maxValue, argRes.maxValue, isSrcUnsigned)
+						}
+					}
+				}
+				res.isRangeCheck = true
+			}
+		}
+	case *ssa.Extract:
+		if v.Index == 0 {
+			if call, ok := v.Tuple.(*ssa.Call); ok {
+				if callee := call.Call.StaticCallee(); callee != nil {
+					switch callee.Name() {
+					case "ParseInt":
+						if len(call.Call.Args) == 3 {
+							if bitSizeVal, ok := GetConstantInt64(call.Call.Args[2]); ok {
+								shift := int(bitSizeVal) - 1
+								if shift >= 0 && shift < 64 {
+									res.minValue = toUint64(-1 << shift)
+									res.maxValue = toUint64((1 << shift) - 1)
+									res.minValueSet = true
+									res.maxValueSet = true
+									res.isRangeCheck = true
+								}
+							}
+						}
+					case "ParseUint":
+						if len(call.Call.Args) == 3 {
+							if bitSizeVal, ok := GetConstantInt64(call.Call.Args[2]); ok {
+								if bitSizeVal == 64 {
+									res.maxValue = maxUint64
+								} else if bitSizeVal > 0 && bitSizeVal < 64 {
+									res.maxValue = (1 << bitSizeVal) - 1
+								}
+								res.minValue = 0
+								res.minValueSet = true
+								res.maxValueSet = true
+								res.isRangeCheck = true
+							}
+						}
+					}
+				}
+			}
+		}
+	case *ssa.Convert:
+		subRes := s.resolveRange(v.X, block, visited)
+		if subRes.minValueSet || subRes.maxValueSet {
+			res = subRes
+		}
+	case *ssa.ChangeType:
+		subRes := s.resolveRange(v.X, block, visited)
+		if subRes.minValueSet || subRes.maxValueSet {
+			res = subRes
+		}
+
+	case *ssa.Const:
+		if val, ok := GetConstantInt64(v); ok {
+			res.minValue = toUint64(val)
+			res.maxValue = toUint64(val)
+			res.minValueSet = true
+			res.maxValueSet = true
+			// Constants are effectively range checks themselves (exact values)
+			res.isRangeCheck = true
+		}
+	}
+
+	return res
+}
+
+// isConstantInRange checks if a constant value fits within the range of the destination type.
 func isConstantInRange(constVal *ssa.Const, dstType string) bool {
 	value, err := strconv.ParseInt(constVal.Value.String(), 10, 64)
 	if err != nil {
 		return false
 	}
 
-	dstInt, err := parseIntType(dstType)
+	dstInt, err := ParseIntType(dstType)
 	if err != nil {
 		return false
 	}
 
-	if dstInt.signed {
-		return value >= -(1<<(dstInt.size-1)) && value <= (1<<(dstInt.size-1))-1
+	if dstInt.Signed {
+		return value >= -(1<<(dstInt.Size-1)) && value <= (1<<(dstInt.Size-1))-1
 	}
-	return value >= 0 && value <= (1<<dstInt.size)-1
+	return value >= 0 && value <= (1<<dstInt.Size)-1
 }
 
-func isStringToIntConversion(instr *ssa.Convert, dstType string) bool {
-	// Traverse the SSA instructions to find the original variable.
-	original := instr.X
-	for {
-		switch v := original.(type) {
-		case *ssa.Call:
-			if v.Call.StaticCallee() != nil && (v.Call.StaticCallee().Name() == "ParseInt" || v.Call.StaticCallee().Name() == "ParseUint") {
-				if len(v.Call.Args) == 3 {
-					if bitSize, ok := v.Call.Args[2].(*ssa.Const); ok {
-						signed := v.Call.StaticCallee().Name() == "ParseInt"
-						bitSizeValue, err := strconv.Atoi(bitSize.Value.String())
-						if err != nil {
-							return false
-						}
-						dstInt, err := parseIntType(dstType)
-						if err != nil {
-							return false
-						}
-
-						// we're good if:
-						// - signs match and bit size is <= than destination
-						// - parsing unsigned and bit size is < than destination
-						isSafe := (bitSizeValue <= dstInt.size && signed == dstInt.signed) ||
-							(bitSizeValue < dstInt.size && !signed)
-						return isSafe
-					}
-				}
-			}
-			return false
-		case *ssa.Phi:
-			original = v.Edges[0]
-		case *ssa.Extract:
-			original = v.Tuple
-		default:
-			return false
-		}
+// getDominators returns a list of dominator blocks for the given block, in order from root to the block.
+func getDominators(block *ssa.BasicBlock) []*ssa.BasicBlock {
+	var doms []*ssa.BasicBlock
+	curr := block
+	for curr != nil {
+		doms = append(doms, curr)
+		curr = curr.Idom()
 	}
+	// Reverse to get root-to-block order
+	for i, j := 0, len(doms)-1; i < j; i, j = i+1, j-1 {
+		doms[i], doms[j] = doms[j], doms[i]
+	}
+	return doms
 }
 
-func hasExplicitRangeCheck(instr *ssa.Convert, dstType string) bool {
-	dstInt, err := parseIntType(dstType)
-	if err != nil {
-		return false
+// isNonNegative checks if a value is statically known to be non-negative.
+func isNonNegative(v ssa.Value) bool {
+	return isNonNegativeRecursive(v, make(map[ssa.Value]bool))
+}
+
+func isNonNegativeRecursive(v ssa.Value, visited map[ssa.Value]bool) bool {
+	if visited[v] {
+		return true // Assume non-negative to break cycles in loop indices
 	}
+	visited[v] = true
 
-	srcInt, err := parseIntType(instr.X.Type().String())
-	if err != nil {
-		return false
-	}
-
-	minValue := srcInt.min
-	maxValue := srcInt.max
-	explicitPositiveVals := []uint{}
-	explicitNegativeVals := []int{}
-
-	if minValue > dstInt.min && maxValue < dstInt.max {
+	// Any unsigned type is inherently non-negative.
+	if srcType := v.Type().Underlying().String(); strings.HasPrefix(srcType, "uint") {
 		return true
 	}
 
-	visitedIfs := make(map[*ssa.If]bool)
-	for _, block := range instr.Parent().Blocks {
-		for _, blockInstr := range block.Instrs {
-			switch v := blockInstr.(type) {
-			case *ssa.If:
-				result := getResultRange(v, instr, visitedIfs)
-				if result.isRangeCheck {
-					minValue = max(minValue, result.minValue)
-					maxValue = min(maxValue, result.maxValue)
-					explicitPositiveVals = append(explicitPositiveVals, result.explicitPositiveVals...)
-					explicitNegativeVals = append(explicitNegativeVals, result.explicitNegativeVals...)
-				}
-			case *ssa.Call:
-				// These function return an int of a guaranteed size.
-				if v != instr.X {
-					continue
-				}
-				if fn, isBuiltin := v.Call.Value.(*ssa.Builtin); isBuiltin {
-					switch fn.Name() {
-					case "len", "cap":
-						minValue = 0
+	v, info := getRealValueFromOperation(v)
+	if info.op == "neg" {
+		return false
+	}
+	switch v := v.(type) {
+	case *ssa.Extract:
+		if _, ok := v.Tuple.(*ssa.Next); ok {
+			return true
+		}
+	case *ssa.Call:
+		if fn, ok := v.Call.Value.(*ssa.Builtin); ok {
+			switch fn.Name() {
+			case "len", "cap":
+				return true
+			case "min":
+				for _, arg := range v.Call.Args {
+					if !isNonNegativeRecursive(arg, visited) {
+						return false
 					}
 				}
+				return len(v.Call.Args) > 0
+			case "max":
+				for _, arg := range v.Call.Args {
+					if isNonNegativeRecursive(arg, visited) {
+						return true
+					}
+				}
+				return false
 			}
-
-			if explicitValsInRange(explicitPositiveVals, explicitNegativeVals, dstInt) {
-				return true
-			} else if minValue >= dstInt.min && maxValue <= dstInt.max {
+		}
+		if callee := v.Call.StaticCallee(); callee != nil {
+			name := callee.String()
+			if strings.Contains(name, "UnixMilli") || strings.Contains(name, "UnixMicro") || strings.Contains(name, "UnixNano") {
 				return true
 			}
+		}
+	case *ssa.BinOp:
+		switch v.Op {
+		case token.ADD, token.MUL, token.QUO:
+			// For ADD, MUL, QUO, if both operands are non-negative, result is non-negative.
+			return isNonNegativeRecursive(v.X, visited) && isNonNegativeRecursive(v.Y, visited)
+		case token.REM, token.AND, token.SHR:
+			// For % and &, non-negativity can be derived if X is non-negative.
+			return isNonNegativeRecursive(v.X, visited)
+		}
+	case *ssa.Const:
+		if val, ok := GetConstantInt64(v); ok && val >= 0 {
+			return true
+		}
+	case *ssa.Phi:
+		// A phi is non-negative if all its incoming edges are non-negative.
+		// Special case for loop indices: if it starts at 0 or -1 (and used as +1).
+		allNonNeg := true
+		for _, edge := range v.Edges {
+			if !isNonNegativeRecursive(edge, visited) {
+				// Check for -1 constant which is common in loop indices that are then incremented.
+				if constVal, ok := edge.(*ssa.Const); ok {
+					if val, ok := GetConstantInt64(constVal); ok && val == -1 {
+						continue
+					}
+				}
+				allNonNeg = false
+				break
+			}
+		}
+		return allNonNeg
+	case *ssa.Convert:
+		srcType := v.X.Type().Underlying().String()
+		if strings.HasPrefix(srcType, "uint") {
+			return true
 		}
 	}
 	return false
 }
 
-// getResultRange is a recursive function that walks the branches of the if statement to find the range of the variable.
-func getResultRange(ifInstr *ssa.If, instr *ssa.Convert, visitedIfs map[*ssa.If]bool) rangeResult {
-	if visitedIfs[ifInstr] {
-		return rangeResult{minValue: math.MinInt, maxValue: math.MaxUint}
-	}
-	visitedIfs[ifInstr] = true
-
-	cond := ifInstr.Cond
-	binOp, ok := cond.(*ssa.BinOp)
-	if !ok || !isRangeCheck(binOp, instr.X) {
-		return rangeResult{minValue: math.MinInt, maxValue: math.MaxUint}
-	}
-
-	result := rangeResult{
-		minValue:     math.MinInt,
-		maxValue:     math.MaxUint,
-		isRangeCheck: true,
-	}
-
-	thenBounds := walkBranchForConvert(ifInstr.Block().Succs[0], instr, visitedIfs)
-	elseBounds := walkBranchForConvert(ifInstr.Block().Succs[1], instr, visitedIfs)
-
-	updateResultFromBinOp(&result, binOp, instr, thenBounds.convertFound)
-
-	if thenBounds.convertFound {
-		result.convertFound = true
-		result.minValue = maxWithPtr(result.minValue, thenBounds.minValue)
-		result.maxValue = minWithPtr(result.maxValue, thenBounds.maxValue)
-	} else if elseBounds.convertFound {
-		result.convertFound = true
-		result.minValue = maxWithPtr(result.minValue, elseBounds.minValue)
-		result.maxValue = minWithPtr(result.maxValue, elseBounds.maxValue)
-	}
-
-	result.explicitPositiveVals = append(result.explicitPositiveVals, thenBounds.explicitPositiveVals...)
-	result.explicitNegativeVals = append(result.explicitNegativeVals, thenBounds.explicitNegativeVals...)
-	result.explicitPositiveVals = append(result.explicitPositiveVals, elseBounds.explicitPositiveVals...)
-	result.explicitNegativeVals = append(result.explicitNegativeVals, elseBounds.explicitNegativeVals...)
-
-	return result
-}
-
-// updateResultFromBinOp updates the rangeResult based on the BinOp instruction and the location of the Convert instruction.
-func updateResultFromBinOp(result *rangeResult, binOp *ssa.BinOp, instr *ssa.Convert, successPathConvert bool) {
-	x, y := binOp.X, binOp.Y
-	operandsFlipped := false
-
-	compareVal, op := getRealValueFromOperation(instr.X)
-
-	// Handle FieldAddr
-	if fieldAddr, ok := compareVal.(*ssa.FieldAddr); ok {
-		compareVal = fieldAddr
-	}
-
-	if !isSameOrRelated(x, compareVal) {
-		y = x
-		operandsFlipped = true
-	}
-
-	constVal, ok := y.(*ssa.Const)
-	if !ok {
-		return
-	}
-	// TODO: constVal.Value nil check avoids #1229 panic but seems to be hiding a bug in the code above or in x/tools/go/ssa.
-	if constVal.Value == nil {
-		// log.Fatalf("[gosec] constVal.Value is nil flipped=%t, constVal=%#v, binOp=%#v", operandsFlipped, constVal, binOp)
-		return
-	}
-	switch binOp.Op {
-	case token.LEQ, token.LSS:
-		updateMinMaxForLessOrEqual(result, constVal, binOp.Op, operandsFlipped, successPathConvert)
-	case token.GEQ, token.GTR:
-		updateMinMaxForGreaterOrEqual(result, constVal, binOp.Op, operandsFlipped, successPathConvert)
-	case token.EQL:
-		if !successPathConvert {
-			break
-		}
-		updateExplicitValues(result, constVal)
-	case token.NEQ:
-		if successPathConvert {
-			break
-		}
-		updateExplicitValues(result, constVal)
-	}
-
-	if op == "neg" {
-		minVal := result.minValue
-		maxVal := result.maxValue
-
-		if minVal >= 0 {
-			result.maxValue = uint(minVal)
-		}
-		if maxVal <= math.MaxInt {
-			result.minValue = int(maxVal)
-		}
-	}
-}
-
-func updateExplicitValues(result *rangeResult, constVal *ssa.Const) {
-	if strings.Contains(constVal.String(), "-") {
-		result.explicitNegativeVals = append(result.explicitNegativeVals, int(constVal.Int64()))
+func updateExplicitValues(result *rangeResult, val int64) {
+	if val < 0 {
+		result.explicitNegativeVals = append(result.explicitNegativeVals, int(val))
 	} else {
-		result.explicitPositiveVals = append(result.explicitPositiveVals, uint(constVal.Uint64()))
+		result.explicitPositiveVals = append(result.explicitPositiveVals, uint(val))
 	}
+	result.minValue = toUint64(val)
+	result.maxValue = toUint64(val)
+	result.minValueSet = true
+	result.maxValueSet = true
 }
 
-func updateMinMaxForLessOrEqual(result *rangeResult, constVal *ssa.Const, op token.Token, operandsFlipped bool, successPathConvert bool) {
-	// If the success path has a conversion and the operands are not flipped, then the constant value is the maximum value.
-	if successPathConvert && !operandsFlipped {
-		result.maxValue = uint(constVal.Uint64())
-		if op == token.LEQ {
-			result.maxValue--
-		}
-	} else {
-		result.minValue = int(constVal.Int64())
-		if op == token.GTR {
-			result.minValue++
-		}
-	}
-}
-
-func updateMinMaxForGreaterOrEqual(result *rangeResult, constVal *ssa.Const, op token.Token, operandsFlipped bool, successPathConvert bool) {
-	// If the success path has a conversion and the operands are not flipped, then the constant value is the minimum value.
-	if successPathConvert && !operandsFlipped {
-		result.minValue = int(constVal.Int64())
-		if op == token.GEQ {
-			result.minValue++
-		}
-	} else {
-		result.maxValue = uint(constVal.Uint64())
+func updateMinMaxForLessOrEqual(result *rangeResult, val int64, op token.Token, operandsFlipped bool, successPathConvert bool) {
+	if successPathConvert != operandsFlipped {
+		// Path where x < val or x <= val
+		result.maxValue = toUint64(val)
 		if op == token.LSS {
 			result.maxValue--
 		}
+		result.maxValueSet = true
+	} else {
+		// Path where x >= val
+		result.minValue = toUint64(val)
+		if op == token.LEQ {
+			result.minValue++ // !(x <= val) -> x > val
+		}
+		result.minValueSet = true
 	}
 }
 
-// walkBranchForConvert walks the branch of the if statement to find the range of the variable and where the conversion is.
-func walkBranchForConvert(block *ssa.BasicBlock, instr *ssa.Convert, visitedIfs map[*ssa.If]bool) branchResults {
-	bounds := branchResults{}
-
-	for _, blockInstr := range block.Instrs {
-		switch v := blockInstr.(type) {
-		case *ssa.If:
-			result := getResultRange(v, instr, visitedIfs)
-			bounds.convertFound = bounds.convertFound || result.convertFound
-
-			if result.isRangeCheck {
-				bounds.minValue = toPtr(maxWithPtr(result.minValue, bounds.minValue))
-				bounds.maxValue = toPtr(minWithPtr(result.maxValue, bounds.maxValue))
-				bounds.explicitPositiveVals = append(bounds.explicitPositiveVals, result.explicitPositiveVals...)
-				bounds.explicitNegativeVals = append(bounds.explicitNegativeVals, result.explicitNegativeVals...)
-			}
-		case *ssa.Call:
-			if v == instr.X {
-				if fn, isBuiltin := v.Call.Value.(*ssa.Builtin); isBuiltin && (fn.Name() == "len" || fn.Name() == "cap") {
-					bounds.minValue = toPtr(0)
-				}
-			}
-		case *ssa.Convert:
-			if v == instr {
-				bounds.convertFound = true
-				return bounds
-			}
+func updateMinMaxForGreaterOrEqual(result *rangeResult, val int64, op token.Token, operandsFlipped bool, successPathConvert bool) {
+	if successPathConvert != operandsFlipped {
+		// Path where x > val or x >= val
+		result.minValue = toUint64(val)
+		if op == token.GTR {
+			result.minValue++
 		}
+		result.minValueSet = true
+	} else {
+		// Path where x < val
+		result.maxValue = toUint64(val)
+		if op == token.GEQ {
+			result.maxValue-- // !(x >= val) -> x < val
+		}
+		result.maxValueSet = true
 	}
-
-	return bounds
 }
 
 func isRangeCheck(v ssa.Value, x ssa.Value) bool {
 	compareVal, _ := getRealValueFromOperation(x)
-
 	switch op := v.(type) {
 	case *ssa.BinOp:
 		switch op.Op {
 		case token.LSS, token.LEQ, token.GTR, token.GEQ, token.EQL, token.NEQ:
-			leftMatch := isSameOrRelated(op.X, compareVal)
-			rightMatch := isSameOrRelated(op.Y, compareVal)
+			leftMatch := isSameOrRelated(op.X, x) || isSameOrRelated(op.X, compareVal)
+			if !leftMatch {
+				if rVal, _ := getRealValueFromOperation(op.X); rVal == x || (compareVal != nil && rVal == compareVal) {
+					leftMatch = true
+				}
+			}
+			rightMatch := isSameOrRelated(op.Y, x) || isSameOrRelated(op.Y, compareVal)
+			if !rightMatch {
+				if rVal, _ := getRealValueFromOperation(op.Y); rVal == x || (compareVal != nil && rVal == compareVal) {
+					rightMatch = true
+				}
+			}
 			return leftMatch || rightMatch
 		}
 	}
 	return false
 }
 
-func getRealValueFromOperation(v ssa.Value) (ssa.Value, string) {
-	switch v := v.(type) {
-	case *ssa.UnOp:
-		if v.Op == token.SUB {
-			val, _ := getRealValueFromOperation(v.X)
-			return val, "neg"
-		}
-		return getRealValueFromOperation(v.X)
-	case *ssa.FieldAddr:
-		return v, "field"
-	case *ssa.Alloc:
-		return v, "alloc"
-	}
-	return v, ""
-}
-
-func isSameOrRelated(a, b ssa.Value) bool {
-	aVal, _ := getRealValueFromOperation(a)
-	bVal, _ := getRealValueFromOperation(b)
-
-	if aVal == bVal {
+func isEquivalent(a, b ssa.Value) bool {
+	if a == b {
 		return true
 	}
-
-	// Check if both are FieldAddr operations referring to the same field of the same struct
-	if aField, aOk := aVal.(*ssa.FieldAddr); aOk {
-		if bField, bOk := bVal.(*ssa.FieldAddr); bOk {
-			return aField.X == bField.X && aField.Field == bField.Field
+	// Handle distinct constant pointers
+	if aConst, ok := a.(*ssa.Const); ok {
+		if bConst, ok := b.(*ssa.Const); ok {
+			return aConst.Value == bConst.Value && aConst.Type() == bConst.Type()
 		}
 	}
 
+	if aBin, ok := a.(*ssa.BinOp); ok {
+		if bBin, ok := b.(*ssa.BinOp); ok {
+			return aBin.Op == bBin.Op && isEquivalent(aBin.X, bBin.X) && isEquivalent(aBin.Y, bBin.Y)
+		}
+	}
+	if aUn, ok := a.(*ssa.UnOp); ok {
+		if bUn, ok := b.(*ssa.UnOp); ok {
+			return aUn.Op == bUn.Op && isEquivalent(aUn.X, bUn.X)
+		}
+	}
 	return false
 }
 
-func explicitValsInRange(explicitPosVals []uint, explicitNegVals []int, dstInt integer) bool {
+func getRealValueFromOperation(v ssa.Value) (ssa.Value, operationInfo) {
+	switch v := v.(type) {
+	case *ssa.UnOp:
+		if v.Op == token.SUB {
+			return v.X, operationInfo{op: "neg"}
+		}
+		return v, operationInfo{}
+	case *ssa.BinOp:
+		switch v.Op {
+		case token.ADD, token.SUB, token.AND, token.SHR, token.SHL, token.REM, token.MUL, token.QUO:
+			if _, ok := v.Y.(*ssa.Const); ok {
+				return v.X, operationInfo{op: v.Op.String(), extra: v.Y}
+			}
+			if _, ok := v.X.(*ssa.Const); ok {
+				return v.Y, operationInfo{op: v.Op.String(), extra: v.X, flipped: true}
+			}
+		}
+	case *ssa.FieldAddr:
+		return v, operationInfo{op: "field"}
+	case *ssa.Alloc:
+		return v, operationInfo{op: "alloc"}
+	}
+	return v, operationInfo{}
+}
+
+// isSameOrRelated checks if two SSA values represent the same underlying variable or related struct fields.
+func isSameOrRelated(a, b ssa.Value) bool {
+	if a == b {
+		return true
+	}
+	if aExt, ok := a.(*ssa.Extract); ok {
+		if bExt, ok := b.(*ssa.Extract); ok {
+			return aExt.Index == bExt.Index && isSameOrRelated(aExt.Tuple, bExt.Tuple)
+		}
+	}
+	aVal, aInfo := getRealValueFromOperation(a)
+	bVal, bInfo := getRealValueFromOperation(b)
+	if aVal == bVal && aInfo.op == bInfo.op {
+		return true
+	}
+	if aField, ok := aVal.(*ssa.FieldAddr); ok {
+		if bField, ok := bVal.(*ssa.FieldAddr); ok {
+			return aField.Field == bField.Field && isSameOrRelated(aField.X, bField.X)
+		}
+	}
+	if aUnOp, ok := aVal.(*ssa.UnOp); ok {
+		if aUnOp.Op == token.MUL {
+			if bUnOp, ok := bVal.(*ssa.UnOp); ok && bUnOp.Op == token.MUL {
+				return isSameOrRelated(aUnOp.X, bUnOp.X)
+			}
+		}
+	}
+	return false
+}
+
+func explicitValsInRange(explicitPosVals []uint, explicitNegVals []int, dstInt IntTypeInfo) bool {
 	if len(explicitPosVals) == 0 && len(explicitNegVals) == 0 {
 		return false
 	}
-
 	for _, val := range explicitPosVals {
-		if val > dstInt.max {
+		if val > dstInt.Max {
 			return false
 		}
 	}
-
 	for _, val := range explicitNegVals {
-		if val < dstInt.min {
+		if val < dstInt.Min {
 			return false
 		}
 	}
-
 	return true
 }
 
-func minWithPtr[T cmp.Ordered](a T, b *T) T {
-	if b == nil {
-		return a
+// resolveRange combines definition-based range analysis (computeRange) with dominator-based constraints (If blocks) to determine the full range of a value.
+func (s *overflowState) resolveRange(v ssa.Value, block *ssa.BasicBlock, visited map[ssa.Value]bool) rangeResult {
+	key := rangeCacheKey{block: block, val: v}
+	if res, ok := s.rangeCache[key]; ok {
+		return res
 	}
-	return min(a, *b)
-}
-
-func maxWithPtr[T cmp.Ordered](a T, b *T) T {
-	if b == nil {
-		return a
+	isSrcUnsigned := strings.HasPrefix(v.Type().Underlying().String(), "uint")
+	// Track bounds
+	result := rangeResult{
+		minValue: 0,
+		maxValue: maxUint64,
 	}
-	return max(a, *b)
-}
+	if !isSrcUnsigned {
+		result.minValue = toUint64(minInt64)
+		result.maxValue = maxInt64
+	}
 
-func toPtr[T any](a T) *T {
-	return &a
+	if isNonNegative(v) {
+		result.minValue = maxBounds(result.minValue, 0, isSrcUnsigned)
+		result.minValueSet = true
+	}
+
+	// Range from definition
+	defRange := s.computeRange(v, block, visited)
+	if defRange.isRangeCheck || defRange.minValueSet || defRange.maxValueSet {
+		result.isRangeCheck = true
+		if defRange.minValueSet {
+			result.minValue = maxBounds(result.minValue, defRange.minValue, isSrcUnsigned)
+			result.minValueSet = true
+		}
+		if defRange.maxValueSet {
+			result.maxValue = minBounds(result.maxValue, defRange.maxValue, isSrcUnsigned)
+			result.maxValueSet = true
+		}
+	}
+
+	// Check all dominating If instructions.
+	idoms := getDominators(block)
+	for _, idom := range idoms {
+		for _, instr := range idom.Instrs {
+			if vIf, ok := instr.(*ssa.If); ok {
+				domRes := s.getResultRangeForValue(vIf, v, block)
+				if domRes.isRangeCheck {
+					result.isRangeCheck = true
+					if domRes.minValueSet {
+						result.minValue = maxBounds(result.minValue, domRes.minValue, isSrcUnsigned)
+						result.minValueSet = true
+					}
+					if domRes.maxValueSet {
+						result.maxValue = minBounds(result.maxValue, domRes.maxValue, isSrcUnsigned)
+						result.maxValueSet = true
+					}
+					result.explicitPositiveVals = append(result.explicitPositiveVals, domRes.explicitPositiveVals...)
+					result.explicitNegativeVals = append(result.explicitNegativeVals, domRes.explicitNegativeVals...)
+				}
+			}
+		}
+	}
+
+	// Range from operand propagation (Recursive resolution for MUL/QUO)
+	// This is needed because computeRange does not see dominators of operands.
+	// We only apply this if the operand has a range derived from constraints (isRangeCheck),
+	// to avoid regressions in pure definition-based constant handling.
+	if binOp, ok := v.(*ssa.BinOp); ok {
+		switch binOp.Op {
+		case token.ADD:
+			// Handle x+C or C+x
+			if val, ok := GetConstantInt64(binOp.Y); ok {
+				subRes := s.resolveRange(binOp.X, block, visited)
+				if subRes.isRangeCheck {
+					if subRes.minValueSet {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.minValue)+val), true, isSrcUnsigned)
+					}
+					if subRes.maxValueSet {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.maxValue)+val), false, isSrcUnsigned)
+					}
+				}
+			} else if val, ok := GetConstantInt64(binOp.X); ok {
+				subRes := s.resolveRange(binOp.Y, block, visited)
+				if subRes.isRangeCheck {
+					if subRes.minValueSet {
+						updateRangeMinMax(&result, toUint64(val+toInt64(subRes.minValue)), true, isSrcUnsigned)
+					}
+					if subRes.maxValueSet {
+						updateRangeMinMax(&result, toUint64(val+toInt64(subRes.maxValue)), false, isSrcUnsigned)
+					}
+				}
+			}
+		case token.SUB:
+			// Handle x-C. C-x logic is harder (inverts min/max), skipping for simplicity/safety unless needed.
+			if val, ok := GetConstantInt64(binOp.Y); ok {
+				subRes := s.resolveRange(binOp.X, block, visited)
+				if subRes.isRangeCheck {
+					if subRes.minValueSet {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.minValue)-val), true, isSrcUnsigned)
+					}
+					if subRes.maxValueSet {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.maxValue)-val), false, isSrcUnsigned)
+					}
+				}
+			}
+		case token.MUL:
+			val, ok := GetConstantUint64(binOp.Y)
+			if !ok {
+				val, ok = GetConstantUint64(binOp.X)
+			}
+			if ok && val != 0 {
+				var subRes rangeResult
+				if _, isConst := binOp.Y.(*ssa.Const); isConst {
+					subRes = s.resolveRange(binOp.X, block, visited)
+				} else {
+					subRes = s.resolveRange(binOp.Y, block, visited)
+				}
+
+				if subRes.maxValueSet {
+					hi, _ := bits.Mul64(subRes.maxValue, val)
+					if hi != 0 {
+						break
+					}
+				}
+
+				if subRes.minValueSet && subRes.isRangeCheck {
+					updateRangeMinMax(&result, subRes.minValue*val, true, isSrcUnsigned)
+				}
+				if subRes.maxValueSet && subRes.isRangeCheck {
+					updateRangeMinMax(&result, subRes.maxValue*val, false, isSrcUnsigned)
+				}
+			}
+		case token.SHL:
+			if val, ok := GetConstantInt64(binOp.Y); ok && val >= 0 {
+				subRes := s.resolveRange(binOp.X, block, visited)
+				if subRes.isRangeCheck {
+					if subRes.minValueSet {
+						newMin := subRes.minValue << uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+						// Check for overflow/wrap-around
+						// #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+						if newMin>>uint(val) == subRes.minValue {
+							updateRangeMinMax(&result, newMin, true, isSrcUnsigned)
+						}
+					}
+					if subRes.maxValueSet {
+						newMax := subRes.maxValue << uint(val) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+						// Check for overflow/wrap-around
+						// #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+						if newMax>>uint(val) == subRes.maxValue {
+							updateRangeMinMax(&result, newMax, false, isSrcUnsigned)
+						}
+					}
+				}
+			}
+		case token.SHR:
+			if val, ok := GetConstantInt64(binOp.Y); ok && val >= 0 {
+				subRes := s.resolveRange(binOp.X, block, visited)
+				if subRes.isRangeCheck {
+					if subRes.minValueSet {
+						updateRangeMinMax(&result, subRes.minValue>>uint(val), true, isSrcUnsigned) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					}
+					if subRes.maxValueSet {
+						updateRangeMinMax(&result, subRes.maxValue>>uint(val), false, isSrcUnsigned) // #nosec G115 - WORKAROUND for old golangci-lint, remove when updated
+					}
+				}
+			}
+		case token.QUO:
+			if val, ok := GetConstantInt64(binOp.Y); ok && val != 0 {
+				subRes := s.resolveRange(binOp.X, block, visited)
+				if val > 0 {
+					if subRes.minValueSet && subRes.isRangeCheck {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.minValue)/val), true, isSrcUnsigned)
+					}
+					if subRes.maxValueSet && subRes.isRangeCheck {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.maxValue)/val), false, isSrcUnsigned)
+					}
+				} else {
+					if subRes.maxValueSet && subRes.isRangeCheck {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.maxValue)/val), true, isSrcUnsigned)
+					}
+					if subRes.minValueSet && subRes.isRangeCheck {
+						updateRangeMinMax(&result, toUint64(toInt64(subRes.minValue)/val), false, isSrcUnsigned)
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to type bounds if not set
+	if !result.minValueSet || !result.maxValueSet {
+		if srcInt, err := ParseIntType(v.Type().Underlying().String()); err == nil {
+			if !result.minValueSet {
+				result.minValue = toUint64(int64(srcInt.Min))
+				result.minValueSet = true
+			}
+			if !result.maxValueSet {
+				result.maxValue = uint64(srcInt.Max)
+				result.maxValueSet = true
+			}
+		}
+	}
+	// Persist in cache
+	s.rangeCache[key] = result
+	return result
 }
