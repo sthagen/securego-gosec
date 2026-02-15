@@ -51,12 +51,24 @@ var _ = Describe("gosec analyzers", func() {
 	})
 
 	Context("report correct errors for all samples", func() {
+		It("should detect context propagation failures", func() {
+			runner("G118", testutils.SampleCodeG118)
+		})
+
+		It("should detect HTTP request smuggling", func() {
+			runner("G113", testutils.SampleCodeG113)
+		})
+
 		It("should detect integer conversion overflow", func() {
 			runner("G115", testutils.SampleCodeG115)
 		})
 
 		It("should detect hardcoded nonce/IV", func() {
 			runner("G407", testutils.SampleCodeG407)
+		})
+
+		It("should detect SSH PublicKeyCallback stateful misuse", func() {
+			runner("G408", testutils.SampleCodeG408)
 		})
 
 		It("should detect out of bounds slice access", func() {

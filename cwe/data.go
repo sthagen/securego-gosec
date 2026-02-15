@@ -68,6 +68,11 @@ var idWeaknesses = map[string]*Weakness{
 		Description: "During installation, installed file permissions are set to allow anyone to modify those files.",
 		Name:        "Incorrect Default Permissions",
 	},
+	"287": {
+		ID:          "287",
+		Description: "The software does not perform or incorrectly performs authentication.",
+		Name:        "Improper Authentication",
+	},
 	"295": {
 		ID:          "295",
 		Description: "The software does not validate, or incorrectly validates, a certificate.",
@@ -117,6 +122,11 @@ var idWeaknesses = map[string]*Weakness{
 		ID:          "409",
 		Description: "The software does not handle or incorrectly handles a compressed input with a very high compression ratio that produces a large output.",
 		Name:        "Improper Handling of Highly Compressed Data (Data Amplification)",
+	},
+	"444": {
+		ID:          "444",
+		Description: "When malformed or unexpected HTTP requests are inconsistently interpreted by one or more entities in the data flow between the user and the web server, such as a proxy or firewall, attackers can abuse this discrepancy to smuggle requests to one system without the other system being aware of it.",
+		Name:        "Inconsistent Interpretation of HTTP Requests ('HTTP Request Smuggling')",
 	},
 	"499": {
 		ID:          "499",

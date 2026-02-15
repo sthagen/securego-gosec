@@ -69,6 +69,7 @@ var ruleToCWE = map[string]string{
 	"G115": "190",
 	"G116": "838",
 	"G117": "499",
+	"G118": "400",
 	"G201": "89",
 	"G202": "89",
 	"G203": "79",
@@ -86,6 +87,7 @@ var ruleToCWE = map[string]string{
 	"G405": "327",
 	"G406": "328",
 	"G407": "1204",
+	"G408": "287",
 	"G501": "327",
 	"G502": "327",
 	"G503": "327",
@@ -202,8 +204,16 @@ func codeSnippetEndLine(node ast.Node, fobj *token.File) int64 {
 // New creates a new Issue
 func New(fobj *token.File, node ast.Node, ruleID, desc string, severity, confidence Score) *Issue {
 	name := fobj.Name()
-	line := GetLine(fobj, node)
-	col := strconv.Itoa(fobj.Position(node.Pos()).Column)
+	var line string
+	var col string
+
+	if node == nil {
+		line = "0"
+		col = "0"
+	} else {
+		line = GetLine(fobj, node)
+		col = strconv.Itoa(fobj.Position(node.Pos()).Column)
+	}
 
 	var code string
 	if node == nil {
