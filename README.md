@@ -197,6 +197,9 @@ directory you can supply `./...` as the input argument.
 - G116: Detect Trojan Source attacks using bidirectional Unicode control characters
 - G117: Potential exposure of secrets via JSON marshaling
 - G118: Context propagation failure leading to goroutine/resource leaks
+- G119: Unsafe redirect policy may propagate sensitive headers
+- G120: Unbounded form parsing in HTTP handlers can cause memory exhaustion
+- G121: Unsafe CrossOriginProtection bypass patterns
 - G201: SQL query construction using format string
 - G202: SQL query construction using string concatenation
 - G203: Use of unescaped data in HTML templates
