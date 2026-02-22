@@ -79,6 +79,10 @@ var _ = Describe("gosec analyzers", func() {
 			runner("G122", testutils.SampleCodeG122)
 		})
 
+		It("should detect TLS resumption VerifyPeerCertificate bypass patterns", func() {
+			runner("G123", testutils.SampleCodeG123)
+		})
+
 		It("should detect hardcoded nonce/IV", func() {
 			runner("G407", testutils.SampleCodeG407)
 		})
@@ -113,6 +117,10 @@ var _ = Describe("gosec analyzers", func() {
 
 		It("should detect log injection via taint analysis", func() {
 			runner("G706", testutils.SampleCodeG706)
+		})
+
+		It("should detect SMTP command/header injection via taint analysis", func() {
+			runner("G707", testutils.SampleCodeG707)
 		})
 	})
 })
