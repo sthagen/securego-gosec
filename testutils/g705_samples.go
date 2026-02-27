@@ -109,4 +109,75 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 `}, 0, gosec.NewConfig()},
+
+	// G705 must NOT fire because the writer argument
+	// is not net/http.ResponseWriter.
+	{[]string{`
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+)
+
+type Masker struct{}
+
+func (m *Masker) MaskSecrets(in string) string { return in }
+
+func streamOutput(pipe io.Reader, outW io.Writer, wg *sync.WaitGroup) {
+	defer wg.Done()
+	masker := &Masker{}
+	reader := bufio.NewReader(pipe)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		line = strings.TrimSuffix(line, "\r")
+		if _, writeErr := fmt.Fprint(outW, masker.MaskSecrets(line)); writeErr != nil {
+			break
+		}
+	}
+}
+
+func main() {
+	cmd := exec.Command("echo", "hello world")
+	stdoutPipe, _ := cmd.StdoutPipe()
+	stderrPipe, _ := cmd.StderrPipe()
+	_ = cmd.Start()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go streamOutput(stdoutPipe, os.Stdout, &wg)
+	go streamOutput(stderrPipe, os.Stderr, &wg)
+	wg.Wait()
+}
+`}, 0, gosec.NewConfig()},
+
+	// TRUE POSITIVE: exec output piped directly to http.ResponseWriter.
+	// G705 MUST fire — the writer IS http.ResponseWriter.
+	{[]string{`
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"os/exec"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	param := r.URL.Query().Get("cmd")
+	out, _ := exec.Command("sh", "-c", param).Output()
+	fmt.Fprint(w, string(out))
+}
+
+func main() {
+	http.HandleFunc("/run", handler)
+	_ = http.ListenAndServe(":8080", nil)
+}
+`}, 1, gosec.NewConfig()},
 }

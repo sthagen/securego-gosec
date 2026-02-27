@@ -13,6 +13,7 @@ package taint
 import (
 	"go/token"
 	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/callgraph/cha"
@@ -77,6 +78,102 @@ type Sink struct {
 	//   - SQL methods: [1] - only check query string (Args[1]), skip receiver
 	//   - fmt.Fprintf: [1,2,3,...] - skip writer (Args[0]), check format and data
 	CheckArgs []int
+
+	// ArgTypeGuards constrains argument types before treating a call as a sink.
+	// Key is the zero-based argument index; value is the required type expressed
+	// as "import/path.TypeName" (e.g. "net/http.ResponseWriter").
+	// The sink only fires when every guarded argument's type implements (or equals)
+	// the named interface/type. When empty, no type constraint is applied.
+	ArgTypeGuards map[int]string
+}
+
+// resolveOriginalType traces back through SSA interface-conversion instructions
+// (ChangeInterface, MakeInterface) to recover the original value's type before
+// any implicit widening to a broader interface (e.g. http.ResponseWriter → io.Writer).
+func resolveOriginalType(v ssa.Value) types.Type {
+	switch val := v.(type) {
+	case *ssa.ChangeInterface:
+		// ChangeInterface converts one interface type to another; trace through.
+		return resolveOriginalType(val.X)
+	case *ssa.MakeInterface:
+		// MakeInterface boxes a concrete value into an interface; return the
+		// concrete type (val.X.Type()), not the interface type.
+		return val.X.Type()
+	}
+	return v.Type()
+}
+
+// guardsSatisfied returns true when every ArgTypeGuard declared in sink is
+// satisfied by the concrete SSA argument types present in args.
+//
+// Interface guards are checked with types.Implements (handles pointer receivers
+// and embedding). Concrete-type guards require exact types.Identical match.
+// When sink.ArgTypeGuards is nil or empty the function always returns true.
+//
+// Argument types are resolved through ChangeInterface/MakeInterface so that
+// an http.ResponseWriter passed where io.Writer is expected is still recognised
+// as implementing http.ResponseWriter.
+func guardsSatisfied(args []ssa.Value, sink Sink, prog *ssa.Program) bool {
+	if len(sink.ArgTypeGuards) == 0 {
+		return true
+	}
+	if prog == nil {
+		return true // no program to resolve types against; skip guard
+	}
+	for argIdx, requiredTypePath := range sink.ArgTypeGuards {
+		if argIdx >= len(args) {
+			return false
+		}
+		// Resolve back through implicit interface conversions.
+		argType := resolveOriginalType(args[argIdx])
+		required := lookupNamedType(requiredTypePath, prog)
+		if required == nil {
+			// Type not found in the program — skip this guard rather than
+			// producing a silent false positive for an absent dependency.
+			continue
+		}
+		iface, isIface := required.Underlying().(*types.Interface)
+		if isIface {
+			// Interface guard: accept if argType or *argType implements iface.
+			if !types.Implements(argType, iface) &&
+				!types.Implements(types.NewPointer(argType), iface) {
+				return false
+			}
+		} else {
+			// Concrete-type guard: require exact named-type identity.
+			if !types.Identical(argType, required) &&
+				!types.Identical(argType, types.NewPointer(required)) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// lookupNamedType resolves a fully-qualified type string of the form
+// "import/path.TypeName" to a types.Type using the SSA program's package set.
+// Returns nil when the package or type name is not found.
+func lookupNamedType(typePath string, prog *ssa.Program) types.Type {
+	lastDot := strings.LastIndex(typePath, ".")
+	if lastDot < 0 {
+		return nil
+	}
+	pkgPath := typePath[:lastDot]
+	typeName := typePath[lastDot+1:]
+
+	for _, pkg := range prog.AllPackages() {
+		if pkg.Pkg == nil || pkg.Pkg.Path() != pkgPath {
+			continue
+		}
+		member := pkg.Pkg.Scope().Lookup(typeName)
+		if member == nil {
+			continue
+		}
+		if tn, ok := member.(*types.TypeName); ok {
+			return tn.Type()
+		}
+	}
+	return nil
 }
 
 // Sanitizer defines a function that neutralizes taint.
@@ -122,6 +219,7 @@ type Analyzer struct {
 	sinks      map[string]Sink     // keyed by full function string
 	sanitizers map[string]struct{} // keyed by full function string
 	callGraph  *callgraph.Graph
+	prog       *ssa.Program // set at Analyze time for ArgTypeGuards resolution
 }
 
 // SetCallGraph injects a precomputed call graph.
@@ -203,6 +301,8 @@ func (a *Analyzer) Analyze(prog *ssa.Program, srcFuncs []*ssa.Function) []Result
 		return nil
 	}
 
+	a.prog = prog
+
 	if a.callGraph == nil {
 		// Build call graph using Class Hierarchy Analysis (CHA).
 		// CHA is fast and sound (no false negatives) but may have false positives.
@@ -238,6 +338,12 @@ func (a *Analyzer) analyzeFunctionSinks(fn *ssa.Function) []Result {
 			// Check if this call is a sink
 			sink, isSink := a.isSinkCall(call)
 			if !isSink {
+				continue
+			}
+
+			// Apply ArgTypeGuards: skip this sink if argument type constraints
+			// are not satisfied (e.g. writer is not http.ResponseWriter).
+			if !guardsSatisfied(call.Call.Args, sink, a.prog) {
 				continue
 			}
 
@@ -414,6 +520,12 @@ func (a *Analyzer) isTainted(v ssa.Value, fn *ssa.Function, visited map[ssa.Valu
 		return false
 	}
 	visited[v] = true
+
+	// Constants are compile-time literals and can never carry attacker-controlled
+	// data. Short-circuit immediately — no taint possible.
+	if _, ok := v.(*ssa.Const); ok {
+		return false
+	}
 
 	// Trace back through SSA instructions
 	switch val := v.(type) {
