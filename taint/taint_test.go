@@ -94,6 +94,29 @@ var _ = Describe("Taint Analysis", func() {
 
 			Expect(sink.CheckArgs).To(BeNil())
 		})
+
+		It("should support ArgTypeGuards for constraining sink matching by argument type", func() {
+			sink := taint.Sink{
+				Package:   "fmt",
+				Method:    "Fprint",
+				CheckArgs: []int{1, 2, 3},
+				ArgTypeGuards: map[int]string{
+					0: "net/http.ResponseWriter",
+				},
+			}
+
+			Expect(sink.ArgTypeGuards).To(HaveLen(1))
+			Expect(sink.ArgTypeGuards[0]).To(Equal("net/http.ResponseWriter"))
+		})
+
+		It("should allow nil ArgTypeGuards to mean no type constraint", func() {
+			sink := taint.Sink{
+				Package: "database/sql",
+				Method:  "Query",
+			}
+
+			Expect(sink.ArgTypeGuards).To(BeNil())
+		})
 	})
 
 	Context("Sanitizer configuration", func() {
@@ -286,6 +309,37 @@ var _ = Describe("Taint Analysis", func() {
 
 			Expect(config.Sinks[0].CheckArgs).To(Equal([]int{2}))
 			Expect(config.Sinks[1].CheckArgs).To(Equal([]int{2}))
+		})
+
+		It("should support ArgTypeGuards to prevent non-HTTP writer false positives (issue #1548)", func() {
+			// G705 used to fire when exec pipe output was written to os.Stdout via fmt.Fprint.
+			// ArgTypeGuards on arg[0] ensures the sink only matches when the writer IS
+			// http.ResponseWriter — plain io.Writer targets (os.Stdout, bytes.Buffer, etc.) are ignored.
+			xssConfig := taint.Config{
+				Sources: []taint.Source{
+					{Package: "net/http", Name: "Request", Pointer: true},
+				},
+				Sinks: []taint.Sink{
+					{
+						Package:       "fmt",
+						Method:        "Fprint",
+						CheckArgs:     []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+						ArgTypeGuards: map[int]string{0: "net/http.ResponseWriter"},
+					},
+					{
+						Package:       "fmt",
+						Method:        "Fprintf",
+						CheckArgs:     []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+						ArgTypeGuards: map[int]string{0: "net/http.ResponseWriter"},
+					},
+				},
+			}
+
+			Expect(xssConfig.Sinks).To(HaveLen(2))
+			for _, sink := range xssConfig.Sinks {
+				Expect(sink.ArgTypeGuards).To(HaveLen(1))
+				Expect(sink.ArgTypeGuards[0]).To(Equal("net/http.ResponseWriter"))
+			}
 		})
 
 		It("should support sanitizers to prevent false positives", func() {
