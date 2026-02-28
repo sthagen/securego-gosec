@@ -157,6 +157,20 @@ func main() {
 	wg.Wait()
 }
 `}, 0, gosec.NewConfig()},
+	// G705 must NOT fire because the writer argument
+	// is not net/http.ResponseWriter.
+	{[]string{`
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Fprint(os.Stdout, os.Args[1])
+}
+`}, 0, gosec.NewConfig()},
 
 	// TRUE POSITIVE: exec output piped directly to http.ResponseWriter.
 	// G705 MUST fire — the writer IS http.ResponseWriter.
