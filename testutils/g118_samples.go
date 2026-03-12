@@ -852,7 +852,7 @@ func multiPhiEdges(ctx context.Context, a, b, c bool) {
 }
 `}, 0, gosec.NewConfig()},
 
-	// Note: nested field access not tracked by current implementation
+	// Safe: nested field cancel called via outer method on Inner type (fixed by isFieldCalledInAnyFunc)
 	{[]string{`
 package main
 
@@ -876,7 +876,7 @@ func (o *Outer) Teardown() {
 		o.inner.cancel()
 	}
 }
-`}, 1, gosec.NewConfig()},
+`}, 0, gosec.NewConfig()},
 
 	// Vulnerable: loop with interface method Do (tests analyzeBlockFeatures invoke)
 	{[]string{`
@@ -1590,6 +1590,286 @@ func NewFoo() Foo {
 func main() {
 	foo := NewFoo()
 	foo.Cancel()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: cancel stored in struct field post-construction, called via defer in same function (issue #1595)
+	{[]string{`
+package main
+
+import "context"
+
+type State struct {
+	done context.CancelFunc
+}
+
+func manage(ctx context.Context) {
+	s := &State{}
+	_, s.done = context.WithCancel(ctx)
+	defer s.done()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: cancel stored in struct field post-construction, called via deferred closure (issue #1595)
+	{[]string{`
+package main
+
+import "context"
+
+type Runner struct {
+	stop context.CancelFunc
+}
+
+func launch(ctx context.Context) {
+	r := &Runner{}
+	_, r.stop = context.WithCancel(ctx)
+	defer func() {
+		r.stop()
+	}()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: package-level cancel assigned in init() and called in another function
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func shutdown() {
+	cancel()
+}
+
+func main() {
+	shutdown()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: package-level cancel with signal handler pattern
+	{[]string{`
+package main
+
+import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+var cancel context.CancelFunc
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func handleSignal() {
+	cancel()
+}
+
+func main() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigChan
+		handleSignal()
+	}()
+	select {}
+}
+`}, 0, gosec.NewConfig()},
+
+	// Vulnerable: package-level cancel never called
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func main() {
+	// Never calls cancel()
+	select {}
+}
+`}, 1, gosec.NewConfig()},
+
+	// Safe: package-level cancel called via defer
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func cleanup() {
+	defer cancel()
+}
+
+func main() {
+	defer cleanup()
+	select {}
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: package-level cancel called in goroutine
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func background() {
+	go func() {
+		cancel()
+	}()
+}
+
+func main() {
+	background()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Vulnerable: multiple package-level cancels, one not called
+	{[]string{`
+package main
+
+import "context"
+
+var cancel1, cancel2 context.CancelFunc
+
+func init() {
+	ctx1, c1 := context.WithCancel(context.Background())
+	cancel1 = c1
+	_ = ctx1
+
+	ctx2, c2 := context.WithCancel(context.Background())
+	cancel2 = c2
+	_ = ctx2
+}
+
+func shutdown() {
+	cancel1()
+}
+
+func main() {
+	shutdown()
+}
+`}, 1, gosec.NewConfig()},
+
+	// Safe: package-level cancel called in closure
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func setup() {
+	defer func() {
+		cancel()
+	}()
+}
+
+func main() {
+	setup()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: package-level cancel called via method
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+type App struct{}
+
+func init() {
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	_ = ctx
+}
+
+func (a *App) Stop() {
+	cancel()
+}
+
+func main() {
+	app := &App{}
+	defer app.Stop()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: package-level cancel passed as argument (tests CallInstruction with arg)
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	_, cancel = context.WithCancel(context.Background())
+}
+
+func invoke(fn func()) {
+	fn()
+}
+
+func execute() {
+	invoke(cancel)
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: package-level cancel in nested defer closure (tests MakeClosure)
+	{[]string{`
+package main
+
+import "context"
+
+var cancel context.CancelFunc
+
+func init() {
+	_, cancel = context.WithCancel(context.Background())
+}
+
+func setup() {
+	defer func() {
+		defer cancel()
+	}()
 }
 `}, 0, gosec.NewConfig()},
 }

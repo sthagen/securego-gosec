@@ -83,6 +83,10 @@ var _ = Describe("gosec analyzers", func() {
 			runner("G123", testutils.SampleCodeG123)
 		})
 
+		It("should detect insecure HTTP cookie configuration", func() {
+			runner("G124", testutils.SampleCodeG124)
+		})
+
 		It("should detect hardcoded nonce/IV", func() {
 			runner("G407", testutils.SampleCodeG407)
 		})
@@ -121,6 +125,14 @@ var _ = Describe("gosec analyzers", func() {
 
 		It("should detect SMTP command/header injection via taint analysis", func() {
 			runner("G707", testutils.SampleCodeG707)
+		})
+
+		It("should detect server-side template injection via taint analysis", func() {
+			runner("G708", testutils.SampleCodeG708)
+		})
+
+		It("should detect unsafe deserialization via taint analysis", func() {
+			runner("G709", testutils.SampleCodeG709)
 		})
 	})
 })
