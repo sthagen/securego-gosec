@@ -219,7 +219,9 @@ func main() {
     fmt.Println(b)
 }
 	`,
-	}, 1, gosec.NewConfig()},
+		// uint -> int (via CustomType) is same platform word size,
+		// no truncation possible.
+	}, 0, gosec.NewConfig()},
 	{[]string{
 		`
 package main
@@ -873,7 +875,8 @@ func sneakyNEQ(a int) uint {
 	panic("not supported")
 }
 	`,
-	}, 1, gosec.NewConfig()},
+		// int -> uint is same platform word size, no truncation.
+	}, 0, gosec.NewConfig()},
 	{[]string{
 		`
 package main
@@ -1962,6 +1965,77 @@ func issue1577UnsafeUpper(v int64) byte {
 		return 0
 	}
 	return byte(v)
+}
+	`}, 1, gosec.NewConfig()},
+	// Platform-word-sized conversions (uintptr/uint/int) are
+	// same-width on all platforms — no truncation possible.
+	{[]string{`
+package main
+
+import (
+	"os"
+	"syscall"
+)
+
+// issue 1635: uintptr -> int for file descriptors is safe
+func issue1635FdToInt(f *os.File) int {
+	return int(f.Fd())
+}
+
+func issue1635SyscallFlock(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+// uint -> int is same platform word size
+func uintToInt(v uint) int {
+	return int(v)
+}
+
+// int -> uint is same platform word size
+func intToUint(v int) uint {
+	return uint(v)
+}
+
+// uintptr -> uint is same platform word size
+func uintptrToUint(v uintptr) uint {
+	return uint(v)
+}
+	`}, 0, gosec.NewConfig()},
+	// Issue #1636: rune from []rune(string) with upper-bound guard
+	{[]string{`
+package main
+
+const maxByte = 255
+
+func sanitize(malformed string) []byte {
+	asRunes := []rune(malformed)
+	final := make([]byte, len(asRunes))
+	for i, r := range asRunes {
+		if r > maxByte {
+			continue
+		}
+		final[i] = byte(r)
+	}
+	return final
+}
+	`}, 0, gosec.NewConfig()},
+	// Negative: []rune parameter (not from string) with only
+	// upper-bound guard is still unsafe.
+	{[]string{`
+package main
+
+func process(runes []rune) []byte {
+	out := make([]byte, 0, len(runes))
+	for _, r := range runes {
+		if r > 255 {
+			continue
+		}
+		out = append(out, byte(r))
+	}
+	return out
 }
 	`}, 1, gosec.NewConfig()},
 }
