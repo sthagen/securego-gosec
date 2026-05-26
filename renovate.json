@@ -1,21 +1,33 @@
 {
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "dependencyDashboard": true,
-  "dependencyDashboardTitle" : "Renovate(bot) : dependency dashboard",
+  "dependencyDashboardTitle": "Renovate(bot) : dependency dashboard",
   "vulnerabilityAlerts": {
     "enabled": true
   },
   "extends": [
     "config:best-practices",
-    "group:all",
+    "helpers:pinGitHubActionDigests",
     "schedule:weekly"
+  ],
+  "recreateWhen": "always",
+  "packageRules": [
+    {
+      "matchPackageNames": ["*"],
+      "groupName": "all dependencies",
+      "groupSlug": "all"
+    },
+    {
+      "description": "Run pin updates immediately, outside of weekly schedule",
+      "matchUpdateTypes": ["pin"],
+      "schedule": ["at any time"]
+    }
   ],
   "lockFileMaintenance": {
     "commitMessageAction": "Update",
     "enabled": true,
-    "extends": [
-      "group:all",
-      "schedule:weekly"
-    ]
+    "schedule": ["before 3am on monday"],
+    "branchPrefix": "renovate/"
   },
   "postUpdateOptions": [
     "gomodTidy",
