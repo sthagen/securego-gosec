@@ -740,4 +740,518 @@ func main() {
 	}
 }
 `}, 1, gosec.NewConfig()},
+	// Issue #1727: G602 not reported for a constant index equal to the length
+	// asserted by an equality guard (index == len is always out of range)
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[4])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)-1 == 1 {
+		fmt.Println(s[1])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		fmt.Println(s[1])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)-1 == 1 {
+	} else {
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 0 {
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Reversed operand order: the constant sits on the left of the guard, which
+	// extractBinOpBound handles in its binop.X arm. The asserted length has to
+	// be honoured in the "then" branch and distrusted in the "else" branch just
+	// as it is when the constant is on the right.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+	} else {
+		fmt.Println(s[1])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A positive constant offset on the compared expression: "len(s) + 1 == 4"
+	// asserts a length of 3, so index 3 is out of range and index 2 is not.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)+1 == 4 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)+1 == 4 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// An "else if" chain: the inner guard owns its own "then" successor, so the
+	// length it asserts still clears an index inside that length.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else if len(s) == 5 {
+		fmt.Println(s[4])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else if len(s) == 5 {
+		fmt.Println(s[5])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A nested equality guard inside the outer "else" branch: the nested guard
+	// is authoritative for the block it opens, so an index inside the length it
+	// asserts is cleared even though the outer branch asserts nothing.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		if len(s) == 1 {
+			fmt.Println(s[0])
+		}
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		if len(s) == 1 {
+			fmt.Println(s[1])
+		}
+	}
+}
+`}, 1, gosec.NewConfig()},
+
+	// Equality guards must validate the actual subslice bounds, only in the then branch.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[1:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)-1 == 2 {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)+1 == 4 {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:4])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3:4])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		fmt.Println(s[:3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		fmt.Println(s[:3:3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[1:])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[3:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func check(n int) {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[1:n])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func check(n int) {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[n:3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func check(n int) {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3:n])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Issue #1755: a len() inequality on one slice must not suppress a
+	// violation on a different slice.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{1}
+	s2 := []int{10}
+	if len(s) >= 3 {
+		fmt.Println(s2[6])
+	}
+	fmt.Println(s2[6])
+}
+`}, 2, gosec.NewConfig()},
+	// Same-slice lower bounds still suppress accesses they actually prove safe.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) >= 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// The boundary itself is not proved safe.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) >= 3 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Reversed comparison has the same meaning.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 <= len(s) {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// The false branch of len(s) < 3 establishes len(s) >= 3.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) < 3 {
+		return
+	}
+	fmt.Println(s[2])
+}
+`}, 0, gosec.NewConfig()},
+	// != 0 guarantees at least one element.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) != 0 {
+		fmt.Println(s[0])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// != N for N > 0 does not guarantee a positive length.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) != 3 {
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A nested branch must not lose the outer same-slice guarantee. The outer
+	// len(s) > 0 proves s[0] safe, while the inner else does not prove s[2].
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]byte, 0)
+	if len(s) > 0 {
+		if len(s) > 4 {
+			fmt.Println(s[3])
+		} else {
+			fmt.Println(s[2])
+		}
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
 }
