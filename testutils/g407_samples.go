@@ -709,6 +709,89 @@ func main() {
 	_ = cipher.NewCTR(block, buf[32:48])
 }
 `}, 0, gosec.NewConfig()},
+
+	// AEAD.Seal is an interface call: it must not count as the read that
+	// fills its own nonce.
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+)
+
+func main() {
+	nonce := make([]byte, 12)
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	aesGCM, _ := cipher.NewGCM(block)
+	_ = aesGCM.Seal(nil, nonce, []byte("My secret message"), nil)
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func main() {
+	nonce := make([]byte, 12)
+	rand.Read(nonce)
+	nonce[0] = 1
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	aesGCM, _ := cipher.NewGCM(block)
+	_ = aesGCM.Seal(nil, nonce, []byte("My secret message"), nil)
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func seal(aead cipher.AEAD, plaintext []byte) []byte {
+	nonce := make([]byte, 12)
+	rand.Read(nonce[:6])
+	return aead.Seal(nil, nonce, plaintext, nil)
+}
+
+func main() {}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func seal(aead cipher.AEAD, plaintext []byte) []byte {
+	nonce := make([]byte, 12)
+	rand.Read(nonce)
+	return aead.Seal(nil, nonce, plaintext, nil)
+}
+
+func main() {}
+`}, 0, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+	"io"
+)
+
+func seal(r io.Reader, aead cipher.AEAD, plaintext []byte) []byte {
+	nonce := make([]byte, 12)
+	r.Read(nonce)
+	return aead.Seal(nil, nonce, plaintext, nil)
+}
+
+func main() {}
+`}, 0, gosec.NewConfig()},
 	{[]string{`package main
 
 import (
@@ -1258,6 +1341,152 @@ func main() {
 }
 `}, 1, gosec.NewConfig()},
 
+	// An array IV starts zeroed, just like a buffer from make.
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+)
+
+func main() {
+	var iv [16]byte
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+)
+
+func main() {
+	iv := new([16]byte)
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func main() {
+	var iv [16]byte
+	rand.Read(iv[:8])
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func main() {
+	var iv [16]byte
+	rand.Read(iv[:])
+	iv[0] = 1
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+)
+
+func main() {
+	iv := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func main() {
+	var iv [16]byte
+	rand.Read(iv[:])
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 0, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"io"
+)
+
+func main() {
+	var iv [16]byte
+	io.ReadFull(rand.Reader, iv[:])
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 0, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+	"io"
+)
+
+func stream(r io.Reader, block cipher.Block) cipher.Stream {
+	var iv [16]byte
+	r.Read(iv[:])
+	return cipher.NewCTR(block, iv[:])
+}
+
+func main() {}
+`}, 0, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func randomIV() [16]byte {
+	var iv [16]byte
+	rand.Read(iv[:])
+	return iv
+}
+
+func main() {
+	iv := randomIV()
+	block, _ := aes.NewCipher([]byte("12345678123456781234567812345678"))
+	_ = cipher.NewCTR(block, iv[:])
+}
+`}, 0, gosec.NewConfig()},
+
 	// Decryption tests - should NOT be flagged as decryption uses the same nonce as encryption
 	{[]string{`package main
 
@@ -1356,5 +1585,85 @@ func main() {
 	var output = make([]byte, 16)
 	aesCFB.XORKeyStream(output, []byte("Very Cool thing!"))
 }
+`}, 1, gosec.NewConfig()},
+
+	// Named array result used as the nonce: the return stores the result back
+	// into its own Alloc, which must not send the analyzer into a loop.
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+	"crypto/rand"
+)
+
+func seal(aead cipher.AEAD, plaintext []byte) (ciphertext []byte, nonce [12]byte) {
+	_, _ = rand.Read(nonce[:])
+	return aead.Seal(nil, nonce[:], plaintext, nil), nonce
+}
+
+func main() {}
+`}, 0, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"errors"
+)
+
+type keyring struct {
+	key []byte
+}
+
+func (k *keyring) seal(plaintext []byte) (ciphertext []byte, nonce [12]byte, err error) {
+	if k == nil {
+		return nil, nonce, errors.New("no keyring")
+	}
+	block, err := aes.NewCipher(k.key)
+	if err != nil {
+		return nil, nonce, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nonce, err
+	}
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, nonce, err
+	}
+	return aead.Seal(nil, nonce[:], plaintext, nil), nonce, nil
+}
+
+func main() {}
+`}, 0, gosec.NewConfig()},
+
+	// Named results are still traced to a hardcoded source.
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+)
+
+func seal(aead cipher.AEAD, plaintext []byte) (ciphertext []byte, nonce []byte) {
+	nonce = []byte("ILoveMyNonce")
+	return aead.Seal(nil, nonce, plaintext, nil), nonce
+}
+
+func main() {}
+`}, 1, gosec.NewConfig()},
+
+	{[]string{`package main
+
+import (
+	"crypto/cipher"
+)
+
+func seal(aead cipher.AEAD, plaintext []byte) (ciphertext []byte, nonce []byte) {
+	nonce = make([]byte, aead.NonceSize())
+	return aead.Seal(nil, nonce, plaintext, nil), nonce
+}
+
+func main() {}
 `}, 1, gosec.NewConfig()},
 }
